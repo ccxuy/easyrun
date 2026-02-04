@@ -76,6 +76,63 @@ cmd_list() {
 }
 
 # -----------------------------------------------------------------------------
+# 命令: show
+# -----------------------------------------------------------------------------
+cmd_show() {
+    local task="${1:-}"
+    [[ -z "$task" ]] && die "用法: ez show <task>"
+
+    local taskfile
+    taskfile=$(find_taskfile ".") || die "未找到 Taskfile"
+
+    # 检查任务是否存在
+    local exists
+    exists=$("$YQ" eval ".tasks.\"$task\" // \"\"" "$taskfile")
+    [[ -z "$exists" || "$exists" == "null" ]] && die "任务未找到: $task"
+
+    echo -e "${BOLD}Task: ${GREEN}$task${NC}"
+    echo ""
+
+    # 描述
+    local desc
+    desc=$(get_task_prop "$taskfile" "$task" "desc")
+    [[ -n "$desc" ]] && echo -e "${BOLD}Description:${NC} $desc" && echo ""
+
+    # 命令
+    echo -e "${BOLD}Commands:${NC}"
+    "$YQ" eval ".tasks.\"$task\".cmds[].cmd // .tasks.\"$task\".cmds[]" "$taskfile" 2>/dev/null | while IFS= read -r cmd; do
+        [[ -n "$cmd" ]] && echo "  - $cmd"
+    done
+    echo ""
+
+    # EZ 参数
+    if has_ez_params "$taskfile" "$task"; then
+        echo -e "${BOLD}Parameters:${NC}"
+        local params_json
+        params_json=$(get_ez_params_json "$taskfile" "$task")
+        local count
+        count=$(echo "$params_json" | "$YQ" eval 'length' -)
+
+        for ((i=0; i<count; i++)); do
+            local pname ptype pdefault phelp poptions
+            pname=$(echo "$params_json" | "$YQ" eval ".[$i].name" -)
+            ptype=$(echo "$params_json" | "$YQ" eval ".[$i].type // \"input\"" -)
+            pdefault=$(echo "$params_json" | "$YQ" eval ".[$i].default // \"\"" -)
+            phelp=$(echo "$params_json" | "$YQ" eval ".[$i].help // \"\"" -)
+
+            echo -e "  ${CYAN}$pname${NC} ($ptype)"
+            [[ -n "$phelp" && "$phelp" != "null" ]] && echo "    Help: $phelp"
+            [[ -n "$pdefault" && "$pdefault" != "null" ]] && echo "    Default: $pdefault"
+
+            if [[ "$ptype" == "select" ]]; then
+                poptions=$(echo "$params_json" | "$YQ" eval ".[$i].options | join(\", \")" - 2>/dev/null || true)
+                [[ -n "$poptions" && "$poptions" != "null" ]] && echo "    Options: $poptions"
+            fi
+        done
+    fi
+}
+
+# -----------------------------------------------------------------------------
 # 主入口
 # -----------------------------------------------------------------------------
 main() {

@@ -24,6 +24,12 @@ tasks:
       - cmd: ./ez list | grep -q "hello" && echo "OK ez list"
       - cmd: ./ez list | grep -q "params" && echo "OK ez list params"
       - cmd: echo ""
+      - cmd: echo "=== 阶段 5 测试 show ==="
+      - cmd: ./ez show hello | grep -q "name" && echo "OK ez show hello"
+      - cmd: ./ez show build | grep -q "Options" && echo "OK ez show build options"
+      - cmd: ./ez show clean | grep -qv "Parameters" && echo "OK ez show clean no params"
+      - cmd: ./ez show xxx 2>&1 | grep -q "未找到" && echo "OK ez show not found"
+      - cmd: echo ""
       - cmd: echo "=== 所有测试通过 ==="
 
   # ==========================================================================
