@@ -44,17 +44,53 @@ EZ 是 [go-task](https://github.com/go-task/task) 的智能前端，专注于改
 
 ```yaml
 tasks:
-  build:
-    desc: "构建项目"
+  deploy:
+    desc: "部署应用"
     cmds:
-      - echo "Building for {{.EZ_ARCH}}"
+      - 'echo "Deploying {{.EZ_APP}} to {{.EZ_ENV}}"'
 
     ez-params:
-      - name: "arch"
+      - name: "app"
         type: "select"
-        options: ["x86_64", "aarch64", "riscv64"]
-        default: "x86_64"
-        help: "目标架构"
+        options: ["frontend", "backend"]
+        default: "frontend"
+        help: |
+          选择要部署的应用
+          - frontend: React 前端
+          - backend: Node.js 后端
+
+      - name: "env"
+        type: "select"
+        options: ["dev", "staging", "prod"]
+        default: "dev"
+        help: "目标环境 ⚠️ prod 需要审批"
+```
+
+### 查看参数详情
+
+```
+$ ./ez show deploy
+
+Task: deploy
+
+Description: 部署应用
+
+Parameters:
+  app (select) → ${{.EZ_APP}}
+    选择要部署的应用
+    - frontend: React 前端
+    - backend: Node.js 后端
+    Default: frontend
+    Options: frontend, backend
+
+  env (select) → ${{.EZ_ENV}}
+    目标环境 ⚠️ prod 需要审批
+    Default: dev
+    Options: dev, staging, prod
+
+Usage:
+  ./ez run deploy
+  ./ez run deploy EZ_APP=frontend EZ_ENV=dev
 ```
 
 ### 参数类型
@@ -142,6 +178,7 @@ easyrun/
 
 ## 版本历史
 
+- **v0.2.7** - 增强 show 命令展示
 - **v0.2.6** - query.url 远程选项获取
 - **v0.2.5** - query.command 动态选项
 - **v0.2.0** - 交互式参数支持 (input/select 类型)

@@ -114,21 +114,60 @@ cmd_show() {
         count=$(echo "$params_json" | "$YQ" eval 'length' -)
 
         for ((i=0; i<count; i++)); do
-            local pname ptype pdefault phelp poptions
+            local pname ptype pdefault phelp poptions query_cmd query_url
             pname=$(echo "$params_json" | "$YQ" eval ".[$i].name" -)
             ptype=$(echo "$params_json" | "$YQ" eval ".[$i].type // \"input\"" -)
             pdefault=$(echo "$params_json" | "$YQ" eval ".[$i].default // \"\"" -)
             phelp=$(echo "$params_json" | "$YQ" eval ".[$i].help // \"\"" -)
+            query_cmd=$(echo "$params_json" | "$YQ" eval ".[$i].query.command // \"\"" -)
+            query_url=$(echo "$params_json" | "$YQ" eval ".[$i].query.url // \"\"" -)
 
-            echo -e "  ${CYAN}$pname${NC} ($ptype)"
-            [[ -n "$phelp" && "$phelp" != "null" ]] && echo "    Help: $phelp"
-            [[ -n "$pdefault" && "$pdefault" != "null" ]] && echo "    Default: $pdefault"
+            # 变量名
+            local varname="EZ_$(echo "$pname" | tr '[:lower:]-' '[:upper:]_')"
 
+            echo ""
+            echo -e "  ${CYAN}$pname${NC} ${YELLOW}($ptype)${NC} → ${GREEN}\${{.$varname}}${NC}"
+
+            # 帮助信息（支持多行）
+            if [[ -n "$phelp" && "$phelp" != "null" ]]; then
+                echo "$phelp" | while IFS= read -r line; do
+                    echo -e "    ${BLUE}$line${NC}"
+                done
+            fi
+
+            # 默认值
+            [[ -n "$pdefault" && "$pdefault" != "null" ]] && echo -e "    Default: ${GREEN}$pdefault${NC}"
+
+            # 静态选项
             if [[ "$ptype" == "select" ]]; then
                 poptions=$(echo "$params_json" | "$YQ" eval ".[$i].options | join(\", \")" - 2>/dev/null || true)
-                [[ -n "$poptions" && "$poptions" != "null" ]] && echo "    Options: $poptions"
+                [[ -n "$poptions" && "$poptions" != "null" ]] && echo -e "    Options: $poptions"
+            fi
+
+            # 动态查询
+            if [[ -n "$query_cmd" && "$query_cmd" != "null" ]]; then
+                echo -e "    Source: ${CYAN}command${NC} → $query_cmd"
+            elif [[ -n "$query_url" && "$query_url" != "null" ]]; then
+                local query_jq
+                query_jq=$(echo "$params_json" | "$YQ" eval ".[$i].query.jq // \"\"" -)
+                echo -e "    Source: ${CYAN}url${NC} → $query_url"
+                [[ -n "$query_jq" && "$query_jq" != "null" ]] && echo -e "    Filter: $query_jq"
             fi
         done
+        echo ""
+
+        # 使用示例
+        echo -e "${BOLD}Usage:${NC}"
+        echo -e "  ./ez run $task"
+        local example_vars=""
+        for ((i=0; i<count; i++)); do
+            local pname pdefault
+            pname=$(echo "$params_json" | "$YQ" eval ".[$i].name" -)
+            pdefault=$(echo "$params_json" | "$YQ" eval ".[$i].default // \"value\"" -)
+            local varname="EZ_$(echo "$pname" | tr '[:lower:]-' '[:upper:]_')"
+            example_vars+=" $varname=$pdefault"
+        done
+        echo -e "  ./ez run $task$example_vars"
     fi
 }
 

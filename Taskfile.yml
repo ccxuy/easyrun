@@ -74,3 +74,41 @@ tasks:
           jq: ".headers | keys"
         default: "Host"
         help: "选择 HTTP header"
+
+  # ==========================================================================
+  # 复杂参数示例 (多行帮助、多参数)
+  # ==========================================================================
+  deploy:
+    desc: "部署应用到服务器"
+    cmds:
+      - cmd: 'echo "Deploying {{.EZ_APP}} to {{.EZ_ENV}} ({{.EZ_REGION}})"'
+      - cmd: 'echo "Replicas = {{.EZ_REPLICAS}}"'
+    ez-params:
+      - name: "app"
+        type: "select"
+        options: ["frontend", "backend", "api-gateway"]
+        default: "frontend"
+        help: |
+          选择要部署的应用
+          - frontend: React 前端应用
+          - backend: Node.js 后端服务
+          - api-gateway: API 网关
+
+      - name: "env"
+        type: "select"
+        options: ["dev", "staging", "prod"]
+        default: "dev"
+        help: |
+          目标环境
+          ⚠️ prod 环境需要审批
+
+      - name: "region"
+        type: "select"
+        options: ["cn-north", "cn-east", "us-west"]
+        default: "cn-north"
+        help: "部署区域"
+
+      - name: "replicas"
+        type: "input"
+        default: "2"
+        help: "副本数量 (1-10)"
