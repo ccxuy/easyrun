@@ -1,0 +1,28 @@
+version: '3'
+
+tasks:
+  hello:
+    desc: "Say hello"
+    cmds:
+      - echo "Hello, {{.EZ_NAME}}!"
+    ez-params:
+      - name: "name"
+        type: "input"
+        default: "World"
+        help: "Your name"
+
+  build:
+    desc: "Build project"
+    cmds:
+      - echo "Building for {{.EZ_ARCH}}"
+    ez-params:
+      - name: "arch"
+        type: "select"
+        options: ["x86_64", "aarch64", "riscv64"]
+        default: "x86_64"
+        help: "Target architecture"
+
+  clean:
+    desc: "Clean artifacts"
+    cmds:
+      - echo "Cleaning..."
