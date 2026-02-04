@@ -1,6 +1,34 @@
 version: '3'
 
 tasks:
+  # ==========================================================================
+  # 测试任务 - 验证 ez 功能
+  # ==========================================================================
+  test:
+    desc: "运行所有 ez 功能测试"
+    cmds:
+      - cmd: echo "=== 阶段 1 测试 依赖 ==="
+      - cmd: ./dep/yq --version
+      - cmd: ./dep/task --version
+      - cmd: echo ""
+      - cmd: echo "=== 阶段 2 测试 核心库 ==="
+      - cmd: bash -c 'source lib/ez-core.sh && check_deps && echo "OK check_deps"'
+      - cmd: bash -c 'source lib/ez-core.sh && get_tasks Taskfile.yml | grep -q hello && echo "OK get_tasks"'
+      - cmd: bash -c 'source lib/ez-core.sh && has_ez_params Taskfile.yml hello && echo "OK has_ez_params"'
+      - cmd: echo ""
+      - cmd: echo "=== 阶段 3 测试 命令框架 ==="
+      - cmd: ./ez help | grep -q "go-task" && echo "OK ez help"
+      - cmd: ./ez version | grep -q "ez version" && echo "OK ez version"
+      - cmd: echo ""
+      - cmd: echo "=== 阶段 4 测试 list ==="
+      - cmd: ./ez list | grep -q "hello" && echo "OK ez list"
+      - cmd: ./ez list | grep -q "params" && echo "OK ez list params"
+      - cmd: echo ""
+      - cmd: echo "=== 所有测试通过 ==="
+
+  # ==========================================================================
+  # 示例任务
+  # ==========================================================================
   hello:
     desc: "Say hello"
     cmds:

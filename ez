@@ -49,6 +49,33 @@ EOF
 }
 
 # -----------------------------------------------------------------------------
+# 命令: list
+# -----------------------------------------------------------------------------
+cmd_list() {
+    local taskfile
+    taskfile=$(find_taskfile ".") || die "未找到 Taskfile"
+
+    echo -e "${BOLD}Tasks in ${taskfile}:${NC}"
+    echo ""
+
+    local tasks
+    tasks=$(get_tasks "$taskfile")
+
+    if [[ -z "$tasks" ]]; then
+        echo "  (无任务)"
+        return
+    fi
+
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        local desc param_flag=""
+        desc=$(get_task_prop "$taskfile" "$name" "desc")
+        has_ez_params "$taskfile" "$name" && param_flag=" ${CYAN}[params]${NC}"
+        printf "  ${GREEN}%-20s${NC} %s%s\n" "$name" "$desc" "$param_flag"
+    done <<< "$tasks"
+}
+
+# -----------------------------------------------------------------------------
 # 主入口
 # -----------------------------------------------------------------------------
 main() {
