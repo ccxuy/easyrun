@@ -33,6 +33,9 @@ EZ - go-task 智能前端
     list              列出所有任务
     show <task>       显示任务详情
     run <task>        运行任务（交互式参数）
+    plan list         列出所有计划
+    plan show <plan>  显示计划详情
+    plan run <plan>   执行计划
     version           显示版本信息
     help              显示帮助
 
@@ -45,6 +48,8 @@ EZ - go-task 智能前端
     ez show build
     ez run build
     ez run build --dry-run
+    ez plan list
+    ez plan run simple-deploy
 EOF
 }
 
@@ -332,6 +337,204 @@ cmd_run() {
 }
 
 # -----------------------------------------------------------------------------
+# Plan 计划相关函数
+# -----------------------------------------------------------------------------
+PLAN_FILE=".ez-plan.yml"
+
+find_planfile() {
+    [[ -f "$PLAN_FILE" ]] && echo "$PLAN_FILE" && return 0
+    [[ -f ".ez-plan.yaml" ]] && echo ".ez-plan.yaml" && return 0
+    return 1
+}
+
+# plan list - 列出所有计划
+cmd_plan_list() {
+    local planfile
+    planfile=$(find_planfile) || die "未找到计划文件 (.ez-plan.yml)"
+
+    echo -e "${BOLD}Plans in ${planfile}:${NC}"
+    echo ""
+
+    local plans
+    plans=$("$YQ" eval '.plans | keys | .[]' "$planfile" 2>/dev/null)
+
+    if [[ -z "$plans" ]]; then
+        echo "  (无计划)"
+        return
+    fi
+
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        local desc step_count
+        desc=$("$YQ" eval ".plans.\"$name\".desc // \"\"" "$planfile")
+        step_count=$("$YQ" eval ".plans.\"$name\".steps | length" "$planfile")
+        printf "  ${GREEN}%-20s${NC} %s ${CYAN}[%s steps]${NC}\n" "$name" "$desc" "$step_count"
+    done <<< "$plans"
+}
+
+# plan show - 显示计划详情
+cmd_plan_show() {
+    local plan="${1:-}"
+    [[ -z "$plan" ]] && die "用法: ez plan show <plan>"
+
+    local planfile
+    planfile=$(find_planfile) || die "未找到计划文件"
+
+    local exists
+    exists=$("$YQ" eval ".plans.\"$plan\" // \"\"" "$planfile")
+    [[ -z "$exists" || "$exists" == "null" ]] && die "计划未找到: $plan"
+
+    echo -e "${BOLD}Plan: ${GREEN}$plan${NC}"
+    echo ""
+
+    local desc
+    desc=$("$YQ" eval ".plans.\"$plan\".desc // \"\"" "$planfile")
+    [[ -n "$desc" ]] && echo -e "${BOLD}Description:${NC} $desc" && echo ""
+
+    echo -e "${BOLD}Steps:${NC}"
+    local steps_json
+    steps_json=$("$YQ" eval -o=json ".plans.\"$plan\".steps // []" "$planfile")
+    local step_count
+    step_count=$(echo "$steps_json" | "$YQ" eval 'length' -)
+
+    for ((i=0; i<step_count; i++)); do
+        local sname stask scheckpoint smatrix
+        sname=$(echo "$steps_json" | "$YQ" eval ".[$i].name // \"step-$i\"" -)
+        stask=$(echo "$steps_json" | "$YQ" eval ".[$i].task // \"\"" -)
+        scheckpoint=$(echo "$steps_json" | "$YQ" eval ".[$i].checkpoint // false" -)
+        smatrix=$(echo "$steps_json" | "$YQ" eval ".[$i].matrix // \"\"" -)
+
+        local step_num=$((i+1))
+        if [[ "$scheckpoint" == "true" ]]; then
+            local prompt
+            prompt=$(echo "$steps_json" | "$YQ" eval ".[$i].prompt // \"Continue?\"" -)
+            echo -e "  ${YELLOW}$step_num. ⏸ $sname${NC} (checkpoint)"
+            echo -e "     ${CYAN}$prompt${NC}"
+        elif [[ -n "$smatrix" && "$smatrix" != "null" ]]; then
+            echo -e "  ${CYAN}$step_num. $sname${NC} → task:$stask [matrix]"
+        else
+            echo -e "  ${CYAN}$step_num. $sname${NC} → task:$stask"
+        fi
+    done
+}
+
+# plan run - 执行计划
+cmd_plan_run() {
+    local plan="${1:-}"
+    shift || true
+    [[ -z "$plan" ]] && die "用法: ez plan run <plan>"
+
+    local planfile dry_run=false
+    planfile=$(find_planfile) || die "未找到计划文件"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run) dry_run=true; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    local exists
+    exists=$("$YQ" eval ".plans.\"$plan\" // \"\"" "$planfile")
+    [[ -z "$exists" || "$exists" == "null" ]] && die "计划未找到: $plan"
+
+    local taskfile
+    taskfile=$(find_taskfile ".") || die "未找到 Taskfile"
+
+    echo -e "${BOLD}========================================${NC}"
+    echo -e "${BOLD}Plan: ${GREEN}$plan${NC}"
+    echo -e "${BOLD}========================================${NC}"
+    echo ""
+
+    local steps_json
+    steps_json=$("$YQ" eval -o=json ".plans.\"$plan\".steps // []" "$planfile")
+    local step_count
+    step_count=$(echo "$steps_json" | "$YQ" eval 'length' -)
+
+    for ((i=0; i<step_count; i++)); do
+        local sname stask scheckpoint smatrix svars sprompt
+        sname=$(echo "$steps_json" | "$YQ" eval ".[$i].name // \"step-$i\"" -)
+        stask=$(echo "$steps_json" | "$YQ" eval ".[$i].task // \"\"" -)
+        scheckpoint=$(echo "$steps_json" | "$YQ" eval ".[$i].checkpoint // false" -)
+        smatrix=$(echo "$steps_json" | "$YQ" eval -o=json ".[$i].matrix // null" -)
+        svars=$(echo "$steps_json" | "$YQ" eval -o=json ".[$i].vars // {}" -)
+
+        local step_num=$((i+1))
+        echo -e "${BOLD}[$step_num/$step_count] $sname${NC}"
+
+        # 检查点
+        if [[ "$scheckpoint" == "true" ]]; then
+            sprompt=$(echo "$steps_json" | "$YQ" eval ".[$i].prompt // \"Continue?\"" -)
+            echo -e "${YELLOW}⏸ Checkpoint: $sprompt${NC}"
+            if ! $dry_run; then
+                read -rp "  Press Enter to continue, or Ctrl+C to abort..." </dev/tty
+            fi
+            echo ""
+            continue
+        fi
+
+        # 矩阵执行
+        if [[ "$smatrix" != "null" ]]; then
+            local matrix_keys matrix_values
+            matrix_keys=$(echo "$smatrix" | "$YQ" eval 'keys | .[]' -)
+
+            # 简化: 只支持单维矩阵
+            local first_key first_values
+            first_key=$(echo "$matrix_keys" | head -1)
+            first_values=$(echo "$smatrix" | "$YQ" eval ".$first_key[]" -)
+
+            while IFS= read -r val; do
+                [[ -z "$val" ]] && continue
+                local var_name="EZ_$(echo "$first_key" | tr '[:lower:]-' '[:upper:]_')"
+                echo -e "  ${CYAN}→ $stask ($first_key=$val)${NC}"
+                if $dry_run; then
+                    echo "    [dry-run] $TASK -t $taskfile $stask $var_name=$val"
+                else
+                    "$TASK" -t "$taskfile" "$stask" "$var_name=$val"
+                fi
+            done <<< "$first_values"
+            echo ""
+            continue
+        fi
+
+        # 普通任务
+        local -a task_vars=()
+        if [[ "$svars" != "{}" && "$svars" != "null" ]]; then
+            while IFS= read -r key; do
+                [[ -z "$key" ]] && continue
+                local val
+                val=$(echo "$svars" | "$YQ" eval ".$key" -)
+                task_vars+=("$key=$val")
+            done < <(echo "$svars" | "$YQ" eval 'keys | .[]' -)
+        fi
+
+        if $dry_run; then
+            echo "  [dry-run] $TASK -t $taskfile $stask ${task_vars[*]}"
+        else
+            "$TASK" -t "$taskfile" "$stask" "${task_vars[@]}"
+        fi
+        echo ""
+    done
+
+    echo -e "${BOLD}========================================${NC}"
+    echo -e "${GREEN}✓ Plan completed: $plan${NC}"
+    echo -e "${BOLD}========================================${NC}"
+}
+
+# plan 命令路由
+cmd_plan() {
+    local subcmd="${1:-list}"
+    shift || true
+
+    case "$subcmd" in
+        list|ls)  cmd_plan_list "$@" ;;
+        show)     cmd_plan_show "$@" ;;
+        run)      cmd_plan_run "$@" ;;
+        *)        die "未知 plan 子命令: $subcmd" ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
 # 主入口
 # -----------------------------------------------------------------------------
 main() {
@@ -344,6 +547,7 @@ main() {
         list|ls)      cmd_list "$@" ;;
         show|info)    cmd_show "$@" ;;
         run|exec)     cmd_run "$@" ;;
+        plan)         cmd_plan "$@" ;;
         version|-v|--version)   cmd_version ;;
         help|-h|--help)         cmd_help ;;
         *)            die "未知命令: $cmd，运行 'ez help' 查看帮助" ;;

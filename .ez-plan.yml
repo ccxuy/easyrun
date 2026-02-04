@@ -1,0 +1,42 @@
+# EZ Plan 示例
+# 用于测试计划编排功能
+
+plans:
+  simple-deploy:
+    desc: "简单部署流程"
+    steps:
+      - name: "构建"
+        task: "build-with-hooks"
+
+      - name: "测试"
+        task: "hello"
+        vars:
+          EZ_NAME: "Test"
+
+      - name: "清理"
+        task: "clean"
+
+  matrix-build:
+    desc: "矩阵构建示例"
+    steps:
+      - name: "多架构构建"
+        task: "build"
+        matrix:
+          arch: ["x86_64", "aarch64"]
+        vars:
+          EZ_ARCH: "{{.arch}}"
+
+  with-checkpoint:
+    desc: "带断点的部署"
+    steps:
+      - name: "构建"
+        task: "clean"
+
+      - name: "确认部署"
+        checkpoint: true
+        prompt: "构建完成，是否继续部署？"
+
+      - name: "部署"
+        task: "hello"
+        vars:
+          EZ_NAME: "Production"

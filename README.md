@@ -35,6 +35,9 @@ EZ 是 [go-task](https://github.com/go-task/task) 的智能前端，专注于改
 | `ez show <task>` | 显示任务详情和参数 |
 | `ez run <task>` | 运行任务（交互式参数） |
 | `ez run <task> --dry-run` | 只显示命令，不执行 |
+| `ez plan list` | 列出所有计划 |
+| `ez plan show <plan>` | 显示计划详情 |
+| `ez plan run <plan>` | 执行计划 |
 | `ez version` | 显示版本信息 |
 | `ez help` | 显示帮助 |
 
@@ -192,6 +195,59 @@ tasks:
 | `$EZ_TASK_EXIT_CODE` | 任务退出码 |
 | `$EZ_TASK_OUTPUT` | 任务输出内容 |
 
+## Plan 计划编排
+
+将多个任务组织成执行计划，支持步骤编排、变量传递和矩阵构建。
+
+### 计划定义 (.ez-plan.yml)
+
+```yaml
+plans:
+  deploy:
+    desc: "部署流程"
+    steps:
+      - name: "构建"
+        task: "build"
+
+      - name: "测试"
+        task: "test"
+        vars:
+          EZ_ENV: "staging"
+
+      - name: "确认"
+        checkpoint: true
+        prompt: "是否继续部署到生产环境？"
+
+      - name: "部署"
+        task: "deploy-prod"
+```
+
+### 矩阵构建
+
+```yaml
+plans:
+  multi-arch:
+    desc: "多架构构建"
+    steps:
+      - name: "构建"
+        task: "build"
+        matrix:
+          arch: ["x86_64", "aarch64"]
+          os: ["linux", "darwin"]
+        vars:
+          EZ_ARCH: "{{.arch}}"
+          EZ_OS: "{{.os}}"
+```
+
+### Plan 命令
+
+| 命令 | 说明 |
+|------|------|
+| `ez plan list` | 列出所有计划 |
+| `ez plan show <plan>` | 显示计划详情 |
+| `ez plan run <plan>` | 执行计划 |
+| `ez plan run <plan> --dry-run` | 预览执行 |
+
 ## 测试
 
 ```bash
@@ -211,12 +267,14 @@ easyrun/
 │   └── yq                # yq 二进制
 ├── task/selftest/        # 自测试套件
 ├── Taskfile.yml          # 示例任务
+├── .ez-plan.yml          # 计划定义
 ├── DESIGN.md             # 设计规格
 └── PLAN.md               # 实现计划
 ```
 
 ## 版本历史
 
+- **v0.4.0** - Plan 计划编排 (list/show/run, matrix)
 - **v0.3.0** - ez-hooks 钩子系统 (pre_run/post_run/on_error)
 - **v0.2.7** - 增强 show 命令展示
 - **v0.2.6** - query.url 远程选项获取

@@ -1,0 +1,34 @@
+# Plan 编排测试
+version: '3'
+
+tasks:
+  all:
+    desc: "运行所有 Plan 测试"
+    cmds:
+      - task: plan-list
+      - task: plan-show
+      - task: plan-run-dry
+      - cmd: echo "✓ 08-plan 全部通过"
+
+  plan-list:
+    desc: "测试 plan list 命令"
+    cmds:
+      - cmd: ./ez plan list | grep -q "simple-deploy"
+      - cmd: ./ez plan list | grep -q "matrix-build"
+      - cmd: ./ez plan list | grep -q "with-checkpoint"
+      - cmd: echo "✓ plan list OK"
+
+  plan-show:
+    desc: "测试 plan show 命令"
+    cmds:
+      - cmd: ./ez plan show simple-deploy | grep -q "简单部署流程"
+      - cmd: ./ez plan show simple-deploy | grep -q "Steps"
+      - cmd: ./ez plan show simple-deploy | grep -q "build-with-hooks"
+      - cmd: echo "✓ plan show OK"
+
+  plan-run-dry:
+    desc: "测试 plan run --dry-run"
+    cmds:
+      - cmd: ./ez plan run simple-deploy --dry-run | grep -q "dry-run"
+      - cmd: ./ez plan run simple-deploy --dry-run | grep -q "Plan completed"
+      - cmd: echo "✓ plan run --dry-run OK"
