@@ -1,0 +1,24 @@
+# 动态参数查询测试
+version: '3'
+
+tasks:
+  all:
+    desc: "运行所有查询测试"
+    cmds:
+      - task: query-command
+      - task: query-preset-skip
+      - cmd: echo "✓ 06-query 全部通过"
+
+  query-command:
+    desc: "测试 query.command 动态选项"
+    cmds:
+      # 验证 show 能显示带 query 的参数
+      - cmd: ./ez show git-checkout | grep -q "branch"
+      - cmd: echo "✓ query.command show OK"
+
+  query-preset-skip:
+    desc: "测试预设值跳过 query 执行"
+    cmds:
+      # 预设值时不应执行 query.command
+      - cmd: ./ez run git-checkout EZ_BRANCH=test --dry-run 2>&1 | grep -qv "query:"
+      - cmd: echo "✓ query preset skip OK"

@@ -17,6 +17,9 @@ includes:
   vars:
     taskfile: ./05-vars.yml
     dir: ../..
+  query:
+    taskfile: ./06-query.yml
+    dir: ../..
 
 tasks:
   default:
@@ -35,6 +38,8 @@ tasks:
       - task: nesting:all
       - cmd: echo ""
       - task: vars:all
+      - cmd: echo ""
+      - task: query:all
       - cmd: echo ""
       - cmd: echo "================================================"
       - cmd: echo "✓ 所有测试通过!"

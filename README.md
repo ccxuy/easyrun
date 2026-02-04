@@ -64,6 +64,39 @@ tasks:
 | `input` | 文本输入 |
 | `select` | 从选项列表选择 |
 
+### 动态选项 (query.command)
+
+使用 `query.command` 从命令输出动态获取选项：
+
+```yaml
+tasks:
+  git-checkout:
+    desc: "切换分支"
+    cmds:
+      - git checkout {{.EZ_BRANCH}}
+
+    ez-params:
+      - name: "branch"
+        type: "select"
+        query:
+          command: "git branch --format='%(refname:short)'"
+        help: "选择分支"
+```
+
+运行时会执行命令获取可选值：
+```
+$ ./ez run git-checkout
+Configure: git-checkout
+
+  (query: git branch --format='%(refname:short)')
+branch
+  选择分支
+    1) main
+    2) develop
+    3) feature/xxx
+  Choice [1-3]:
+```
+
 ## 测试
 
 ```bash
@@ -89,6 +122,7 @@ easyrun/
 
 ## 版本历史
 
+- **v0.2.5** - query.command 动态选项
 - **v0.2.0** - 交互式参数支持 (input/select 类型)
 - **v0.1.5** - run 命令基础执行
 - **v0.1.4** - show 命令

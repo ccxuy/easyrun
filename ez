@@ -228,6 +228,18 @@ cmd_run() {
                 echo -e "${BOLD}$pname${NC}: $preset (preset)"
                 value="$preset"
             else
+                # 检查 query.command 动态获取选项
+                local query_cmd
+                query_cmd=$(echo "$params_json" | "$YQ" eval ".[$i].query.command // \"\"" -)
+                if [[ -n "$query_cmd" && "$query_cmd" != "null" && ("$poptions" == "[]" || "$poptions" == "null") ]]; then
+                    echo -e "  ${CYAN}(query: $query_cmd)${NC}" >&2
+                    local cmd_output
+                    if cmd_output=$(eval "$query_cmd" 2>/dev/null); then
+                        # 将命令输出转换为 JSON 数组
+                        poptions=$(echo "$cmd_output" | "$YQ" -o=json -I0 'split("\n") | map(select(. != ""))')
+                    fi
+                fi
+
                 value=$(select_value "$pname" "$ptype" "$poptions" "$pdefault" "$phelp")
                 extra_vars+=("$varname=$value")
             fi

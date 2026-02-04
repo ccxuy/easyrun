@@ -47,3 +47,17 @@ tasks:
     desc: "Clean artifacts"
     cmds:
       - cmd: echo "Cleaning..."
+
+  # ==========================================================================
+  # 动态选项示例 (query.command)
+  # ==========================================================================
+  git-checkout:
+    desc: "切换 Git 分支"
+    cmds:
+      - cmd: echo "Switching to branch {{.EZ_BRANCH}}"
+    ez-params:
+      - name: "branch"
+        type: "select"
+        query:
+          command: "git branch --format='%(refname:short)'"
+        help: "选择分支"
