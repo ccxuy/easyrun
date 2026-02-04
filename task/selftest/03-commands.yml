@@ -1,0 +1,51 @@
+# ez 命令测试
+version: '3'
+
+tasks:
+  all:
+    desc: "运行所有命令测试"
+    cmds:
+      - task: help
+      - task: version
+      - task: list
+      - task: show
+      - task: run
+      - cmd: echo "✓ 03-commands 全部通过"
+
+  help:
+    desc: "测试 ez help"
+    cmds:
+      - cmd: ./ez help | grep -q "go-task"
+      - cmd: echo "✓ ez help OK"
+
+  version:
+    desc: "测试 ez version"
+    cmds:
+      - cmd: ./ez version | grep -q "ez version"
+      - cmd: echo "✓ ez version OK"
+
+  list:
+    desc: "测试 ez list"
+    cmds:
+      - cmd: ./ez list | grep -q "hello"
+      - cmd: ./ez list | grep -q "params"
+      - cmd: echo "✓ ez list OK"
+
+  show:
+    desc: "测试 ez show"
+    cmds:
+      - cmd: ./ez show hello | grep -q "name"
+      - cmd: ./ez show build | grep -q "Options"
+      - cmd: ./ez show clean | grep -qv "Parameters"
+      - cmd: ./ez show nonexistent 2>&1 | grep -q "未找到"
+      - cmd: echo "✓ ez show OK"
+
+  run:
+    desc: "测试 ez run"
+    cmds:
+      - cmd: ./ez run clean | grep -q "Cleaning"
+      - cmd: ./ez run clean --dry-run | grep -q "Dry run"
+      - cmd: ./ez run hello EZ_NAME=Test --dry-run | grep -q "EZ_NAME=Test"
+      - cmd: ./ez run build EZ_ARCH=aarch64 --dry-run | grep -q "EZ_ARCH=aarch64"
+      - cmd: ./ez run hello EZ_NAME=World | grep -q "Hello, World"
+      - cmd: echo "✓ ez run OK"

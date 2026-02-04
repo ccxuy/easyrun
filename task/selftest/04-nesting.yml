@@ -1,0 +1,102 @@
+# 任务嵌套与依赖测试
+# 测试 go-task 的 deps、task 调用等能力
+version: '3'
+
+vars:
+  NESTED_VAR: "from-parent"
+
+tasks:
+  all:
+    desc: "运行所有嵌套测试"
+    cmds:
+      - task: deps-chain
+      - task: task-call
+      - task: vars-passing
+      - task: parallel-deps
+      - cmd: echo "✓ 04-nesting 全部通过"
+
+  # ============================================================
+  # 依赖链测试: a -> b -> c
+  # ============================================================
+  deps-chain:
+    desc: "测试依赖链执行顺序"
+    deps: [_chain-c]
+    cmds:
+      - cmd: echo "✓ deps-chain OK (c->b->a order)"
+
+  _chain-a:
+    internal: true
+    cmds:
+      - cmd: echo "  chain-a executed"
+
+  _chain-b:
+    internal: true
+    deps: [_chain-a]
+    cmds:
+      - cmd: echo "  chain-b executed (after a)"
+
+  _chain-c:
+    internal: true
+    deps: [_chain-b]
+    cmds:
+      - cmd: echo "  chain-c executed (after b)"
+
+  # ============================================================
+  # task 调用测试
+  # ============================================================
+  task-call:
+    desc: "测试 task 互相调用"
+    cmds:
+      - cmd: echo "  parent start"
+      - task: _child-task
+      - cmd: echo "  parent end"
+      - cmd: echo "✓ task-call OK"
+
+  _child-task:
+    internal: true
+    cmds:
+      - cmd: echo "    child executed"
+
+  # ============================================================
+  # 变量传递测试
+  # ============================================================
+  vars-passing:
+    desc: "测试变量传递"
+    cmds:
+      - cmd: echo "  parent var = {{.NESTED_VAR}}"
+      - task: _child-with-var
+        vars:
+          CHILD_VAR: "passed-to-child"
+      - cmd: echo "✓ vars-passing OK"
+
+  _child-with-var:
+    internal: true
+    cmds:
+      - cmd: echo "    child received = {{.CHILD_VAR}}"
+
+  # ============================================================
+  # 并行依赖测试
+  # ============================================================
+  parallel-deps:
+    desc: "测试并行依赖执行"
+    deps:
+      - _parallel-1
+      - _parallel-2
+      - _parallel-3
+    cmds:
+      - cmd: echo "✓ parallel-deps OK (all deps completed)"
+
+  _parallel-1:
+    internal: true
+    cmds:
+      - cmd: echo "  parallel-1 done"
+
+  _parallel-2:
+    internal: true
+    cmds:
+      - cmd: echo "  parallel-2 done"
+
+  _parallel-3:
+    internal: true
+    cmds:
+      - cmd: echo "  parallel-3 done"

@@ -1,0 +1,48 @@
+# EZ 自测试主入口
+version: '3'
+
+includes:
+  deps:
+    taskfile: ./01-deps.yml
+    dir: ../..
+  core:
+    taskfile: ./02-core.yml
+    dir: ../..
+  commands:
+    taskfile: ./03-commands.yml
+    dir: ../..
+  nesting:
+    taskfile: ./04-nesting.yml
+    dir: ../..
+  vars:
+    taskfile: ./05-vars.yml
+    dir: ../..
+
+tasks:
+  default:
+    desc: "运行所有自测试"
+    cmds:
+      - cmd: echo "================================================"
+      - cmd: echo "EZ 自测试套件"
+      - cmd: echo "================================================"
+      - cmd: echo ""
+      - task: deps:all
+      - cmd: echo ""
+      - task: core:all
+      - cmd: echo ""
+      - task: commands:all
+      - cmd: echo ""
+      - task: nesting:all
+      - cmd: echo ""
+      - task: vars:all
+      - cmd: echo ""
+      - cmd: echo "================================================"
+      - cmd: echo "✓ 所有测试通过!"
+      - cmd: echo "================================================"
+
+  quick:
+    desc: "快速测试 (仅核心功能)"
+    cmds:
+      - task: deps:all
+      - task: commands:all
+      - cmd: echo "✓ 快速测试通过"

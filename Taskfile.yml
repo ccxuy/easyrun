@@ -1,51 +1,31 @@
 version: '3'
 
+includes:
+  selftest:
+    taskfile: ./task/selftest/Taskfile.yml
+    dir: .
+
 tasks:
   # ==========================================================================
-  # 测试任务 - 验证 ez 功能
+  # 测试入口
   # ==========================================================================
   test:
-    desc: "运行所有 ez 功能测试"
+    desc: "运行所有自测试"
     cmds:
-      - cmd: echo "=== 阶段 1 测试 依赖 ==="
-      - cmd: ./dep/yq --version
-      - cmd: ./dep/task --version
-      - cmd: echo ""
-      - cmd: echo "=== 阶段 2 测试 核心库 ==="
-      - cmd: bash -c 'source lib/ez-core.sh && check_deps && echo "OK check_deps"'
-      - cmd: bash -c 'source lib/ez-core.sh && get_tasks Taskfile.yml | grep -q hello && echo "OK get_tasks"'
-      - cmd: bash -c 'source lib/ez-core.sh && has_ez_params Taskfile.yml hello && echo "OK has_ez_params"'
-      - cmd: echo ""
-      - cmd: echo "=== 阶段 3 测试 命令框架 ==="
-      - cmd: ./ez help | grep -q "go-task" && echo "OK ez help"
-      - cmd: ./ez version | grep -q "ez version" && echo "OK ez version"
-      - cmd: echo ""
-      - cmd: echo "=== 阶段 4 测试 list ==="
-      - cmd: ./ez list | grep -q "hello" && echo "OK ez list"
-      - cmd: ./ez list | grep -q "params" && echo "OK ez list params"
-      - cmd: echo ""
-      - cmd: echo "=== 阶段 5 测试 show ==="
-      - cmd: ./ez show hello | grep -q "name" && echo "OK ez show hello"
-      - cmd: ./ez show build | grep -q "Options" && echo "OK ez show build options"
-      - cmd: ./ez show clean | grep -qv "Parameters" && echo "OK ez show clean no params"
-      - cmd: ./ez show xxx 2>&1 | grep -q "未找到" && echo "OK ez show not found"
-      - cmd: echo ""
-      - cmd: echo "=== 阶段 6 测试 run ==="
-      - cmd: ./ez run clean | grep -q "Cleaning" && echo "OK ez run clean"
-      - cmd: ./ez run clean --dry-run | grep -q "Dry run" && echo "OK ez run dry-run"
-      - cmd: ./ez run hello EZ_NAME=Test --dry-run | grep -q "EZ_NAME=Test" && echo "OK ez run preset input"
-      - cmd: ./ez run build EZ_ARCH=aarch64 --dry-run | grep -q "EZ_ARCH=aarch64" && echo "OK ez run preset select"
-      - cmd: ./ez run hello EZ_NAME=World | grep -q "Hello, World" && echo "OK ez run execute"
-      - cmd: echo ""
-      - cmd: echo "=== 所有测试通过 ==="
+      - task: selftest:default
+
+  test:quick:
+    desc: "快速测试"
+    cmds:
+      - task: selftest:quick
 
   # ==========================================================================
-  # 示例任务
+  # 示例任务 (用于测试 ez 命令)
   # ==========================================================================
   hello:
     desc: "Say hello"
     cmds:
-      - echo "Hello, {{.EZ_NAME}}!"
+      - cmd: echo "Hello, {{.EZ_NAME}}!"
     ez-params:
       - name: "name"
         type: "input"
@@ -55,7 +35,7 @@ tasks:
   build:
     desc: "Build project"
     cmds:
-      - echo "Building for {{.EZ_ARCH}}"
+      - cmd: echo "Building for {{.EZ_ARCH}}"
     ez-params:
       - name: "arch"
         type: "select"
@@ -66,4 +46,4 @@ tasks:
   clean:
     desc: "Clean artifacts"
     cmds:
-      - echo "Cleaning..."
+      - cmd: echo "Cleaning..."

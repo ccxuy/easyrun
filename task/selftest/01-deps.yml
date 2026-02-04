@@ -1,0 +1,24 @@
+# 依赖安装测试
+version: '3'
+
+tasks:
+  all:
+    desc: "运行所有依赖测试"
+    cmds:
+      - task: yq
+      - task: task-bin
+      - cmd: echo "✓ 01-deps 全部通过"
+
+  yq:
+    desc: "测试 yq 可用"
+    cmds:
+      - cmd: test -x ./dep/yq
+      - cmd: ./dep/yq --version | grep -q "yq"
+      - cmd: echo "✓ yq OK"
+
+  task-bin:
+    desc: "测试 task 可用"
+    cmds:
+      - cmd: test -x ./dep/task
+      - cmd: ./dep/task --version | grep -qE "^[0-9]"
+      - cmd: echo "✓ task OK"

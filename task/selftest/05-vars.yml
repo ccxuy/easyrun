@@ -1,0 +1,51 @@
+# 变量与环境测试
+version: '3'
+
+vars:
+  GLOBAL_VAR: "global-value"
+  COMPUTED_VAR:
+    sh: echo "computed-$(date +%s)"
+
+env:
+  TEST_ENV: "from-taskfile"
+
+tasks:
+  all:
+    desc: "运行所有变量测试"
+    cmds:
+      - task: global-vars
+      - task: local-vars
+      - task: env-vars
+      - task: dynamic-vars
+      - cmd: echo "✓ 05-vars 全部通过"
+
+  global-vars:
+    desc: "测试全局变量"
+    cmds:
+      - cmd: test "{{.GLOBAL_VAR}}" = "global-value"
+      - cmd: echo "✓ global-vars OK ({{.GLOBAL_VAR}})"
+
+  local-vars:
+    desc: "测试局部变量覆盖"
+    vars:
+      LOCAL_VAR: "local-value"
+      GLOBAL_VAR: "overridden"
+    cmds:
+      - cmd: test "{{.LOCAL_VAR}}" = "local-value"
+      - cmd: test "{{.GLOBAL_VAR}}" = "overridden"
+      - cmd: echo "✓ local-vars OK"
+
+  env-vars:
+    desc: "测试环境变量"
+    cmds:
+      - cmd: test "$TEST_ENV" = "from-taskfile"
+      - cmd: echo "✓ env-vars OK ($TEST_ENV)"
+
+  dynamic-vars:
+    desc: "测试动态变量 (sh)"
+    vars:
+      DYNAMIC:
+        sh: echo "dynamic-result"
+    cmds:
+      - cmd: test "{{.DYNAMIC}}" = "dynamic-result"
+      - cmd: echo "✓ dynamic-vars OK ({{.DYNAMIC}})"

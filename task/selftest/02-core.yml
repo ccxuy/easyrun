@@ -1,0 +1,39 @@
+# 核心库测试
+version: '3'
+
+tasks:
+  all:
+    desc: "运行所有核心库测试"
+    cmds:
+      - task: source
+      - task: check-deps
+      - task: find-taskfile
+      - task: get-tasks
+      - task: has-ez-params
+      - cmd: echo "✓ 02-core 全部通过"
+
+  source:
+    desc: "测试加载核心库"
+    cmds:
+      - cmd: bash -c 'source lib/ez-core.sh && echo "✓ source OK"'
+
+  check-deps:
+    desc: "测试依赖检查"
+    cmds:
+      - cmd: bash -c 'source lib/ez-core.sh && check_deps && echo "✓ check_deps OK"'
+
+  find-taskfile:
+    desc: "测试查找 Taskfile"
+    cmds:
+      - cmd: bash -c 'source lib/ez-core.sh && find_taskfile . >/dev/null && echo "✓ find_taskfile OK"'
+
+  get-tasks:
+    desc: "测试获取任务列表"
+    cmds:
+      - cmd: bash -c 'source lib/ez-core.sh && get_tasks Taskfile.yml | grep -q hello && echo "✓ get_tasks OK"'
+
+  has-ez-params:
+    desc: "测试 ez-params 检测"
+    cmds:
+      - cmd: bash -c 'source lib/ez-core.sh && has_ez_params Taskfile.yml hello && echo "✓ has_ez_params (true) OK"'
+      - cmd: bash -c 'source lib/ez-core.sh && ! has_ez_params Taskfile.yml clean && echo "✓ has_ez_params (false) OK"'
