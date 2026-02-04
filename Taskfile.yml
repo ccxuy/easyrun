@@ -61,3 +61,16 @@ tasks:
         query:
           command: "git branch --format='%(refname:short)'"
         help: "选择分支"
+
+  fetch-ip:
+    desc: "获取 IP 信息 (query.url 示例)"
+    cmds:
+      - cmd: echo "Selected format {{.EZ_FORMAT}}"
+    ez-params:
+      - name: "format"
+        type: "select"
+        query:
+          url: "https://httpbin.org/get"
+          jq: ".headers | keys"
+        default: "Host"
+        help: "选择 HTTP header"

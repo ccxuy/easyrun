@@ -229,14 +229,28 @@ cmd_run() {
                 value="$preset"
             else
                 # 检查 query.command 动态获取选项
-                local query_cmd
+                local query_cmd query_url query_jq
                 query_cmd=$(echo "$params_json" | "$YQ" eval ".[$i].query.command // \"\"" -)
+                query_url=$(echo "$params_json" | "$YQ" eval ".[$i].query.url // \"\"" -)
+                query_jq=$(echo "$params_json" | "$YQ" eval ".[$i].query.jq // \"\"" -)
+
                 if [[ -n "$query_cmd" && "$query_cmd" != "null" && ("$poptions" == "[]" || "$poptions" == "null") ]]; then
                     echo -e "  ${CYAN}(query: $query_cmd)${NC}" >&2
                     local cmd_output
                     if cmd_output=$(eval "$query_cmd" 2>/dev/null); then
-                        # 将命令输出转换为 JSON 数组
                         poptions=$(echo "$cmd_output" | "$YQ" -o=json -I0 'split("\n") | map(select(. != ""))')
+                    fi
+                elif [[ -n "$query_url" && "$query_url" != "null" && ("$poptions" == "[]" || "$poptions" == "null") ]]; then
+                    echo -e "  ${CYAN}(fetch: $query_url)${NC}" >&2
+                    local url_output
+                    if url_output=$(curl -fsSL "$query_url" 2>/dev/null); then
+                        if [[ -n "$query_jq" && "$query_jq" != "null" ]]; then
+                            # 使用 jq 表达式提取数据
+                            poptions=$(echo "$url_output" | "$YQ" -o=json "$query_jq")
+                        else
+                            # 假设返回的是每行一个选项
+                            poptions=$(echo "$url_output" | "$YQ" -o=json -I0 'split("\n") | map(select(. != ""))')
+                        fi
                     fi
                 fi
 

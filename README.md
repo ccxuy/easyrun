@@ -97,6 +97,26 @@ branch
   Choice [1-3]:
 ```
 
+### 远程 URL 选项 (query.url)
+
+从 URL 获取 JSON 数据并提取选项：
+
+```yaml
+tasks:
+  select-version:
+    desc: "选择版本"
+    cmds:
+      - echo "Version {{.EZ_VERSION}}"
+
+    ez-params:
+      - name: "version"
+        type: "select"
+        query:
+          url: "https://api.example.com/versions"
+          jq: ".versions[]"
+        help: "选择版本号"
+```
+
 ## 测试
 
 ```bash
@@ -122,6 +142,7 @@ easyrun/
 
 ## 版本历史
 
+- **v0.2.6** - query.url 远程选项获取
 - **v0.2.5** - query.command 动态选项
 - **v0.2.0** - 交互式参数支持 (input/select 类型)
 - **v0.1.5** - run 命令基础执行

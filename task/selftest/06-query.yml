@@ -7,6 +7,7 @@ tasks:
     cmds:
       - task: query-command
       - task: query-preset-skip
+      - task: query-url-preset
       - cmd: echo "✓ 06-query 全部通过"
 
   query-command:
@@ -17,8 +18,15 @@ tasks:
       - cmd: echo "✓ query.command show OK"
 
   query-preset-skip:
-    desc: "测试预设值跳过 query 执行"
+    desc: "测试预设值跳过 query.command 执行"
     cmds:
       # 预设值时不应执行 query.command
       - cmd: ./ez run git-checkout EZ_BRANCH=test --dry-run 2>&1 | grep -qv "query:"
-      - cmd: echo "✓ query preset skip OK"
+      - cmd: echo "✓ query.command preset skip OK"
+
+  query-url-preset:
+    desc: "测试预设值跳过 query.url 执行"
+    cmds:
+      # 预设值时不应执行 query.url
+      - cmd: ./ez run fetch-ip EZ_FORMAT=Host --dry-run 2>&1 | grep -qv "fetch:"
+      - cmd: echo "✓ query.url preset skip OK"
