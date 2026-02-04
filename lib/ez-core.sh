@@ -103,3 +103,62 @@ get_ez_params_json() {
     local task="$2"
     "$YQ" eval -o=json ".tasks.\"$task\".ez-params // []" "$taskfile" 2>/dev/null
 }
+
+# -----------------------------------------------------------------------------
+# ez-hooks 钩子函数
+# -----------------------------------------------------------------------------
+
+# 检查任务是否有 ez-hooks
+# 参数: $1 = Taskfile, $2 = 任务名, $3 = 钩子类型 (pre_run/post_run/on_error)
+has_ez_hook() {
+    local taskfile="$1"
+    local task="$2"
+    local hook_type="$3"
+    local count
+    count=$("$YQ" eval ".tasks.\"$task\".ez-hooks.$hook_type | length" "$taskfile" 2>/dev/null)
+    [[ "$count" != "0" && "$count" != "null" && -n "$count" ]]
+}
+
+# 获取 ez-hooks 为 JSON
+# 参数: $1 = Taskfile, $2 = 任务名, $3 = 钩子类型
+get_ez_hooks_json() {
+    local taskfile="$1"
+    local task="$2"
+    local hook_type="$3"
+    "$YQ" eval -o=json ".tasks.\"$task\".ez-hooks.$hook_type // []" "$taskfile" 2>/dev/null
+}
+
+# 执行钩子
+# 参数: $1 = Taskfile, $2 = 任务名, $3 = 钩子类型, $4 = 任务退出码, $5 = 任务输出(可选)
+run_hooks() {
+    local taskfile="$1"
+    local task="$2"
+    local hook_type="$3"
+    local exit_code="${4:-0}"
+    local task_output="${5:-}"
+
+    if ! has_ez_hook "$taskfile" "$task" "$hook_type"; then
+        return 0
+    fi
+
+    local hooks_json
+    hooks_json=$(get_ez_hooks_json "$taskfile" "$task" "$hook_type")
+    local count
+    count=$(echo "$hooks_json" | "$YQ" eval 'length' -)
+
+    echo -e "${BOLD}[ez-hooks:$hook_type]${NC}"
+    for ((i=0; i<count; i++)); do
+        local hook_name hook_script
+        hook_name=$(echo "$hooks_json" | "$YQ" eval ".[$i].name // \"hook-$i\"" -)
+        hook_script=$(echo "$hooks_json" | "$YQ" eval ".[$i].script // \"\"" -)
+
+        if [[ -n "$hook_script" && "$hook_script" != "null" ]]; then
+            echo -e "  ${CYAN}→ $hook_name${NC}"
+            # 导出上下文供钩子使用
+            export EZ_TASK_NAME="$task"
+            export EZ_TASK_EXIT_CODE="$exit_code"
+            export EZ_TASK_OUTPUT="$task_output"
+            eval "$hook_script"
+        fi
+    done
+}

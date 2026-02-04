@@ -112,3 +112,31 @@ tasks:
         type: "input"
         default: "2"
         help: "副本数量 (1-10)"
+
+  # ==========================================================================
+  # ez-hooks 示例
+  # ==========================================================================
+  build-with-hooks:
+    desc: "带钩子的构建任务"
+    cmds:
+      - cmd: 'echo "Building project..."'
+      - cmd: 'echo "Build completed!"'
+    ez-hooks:
+      pre_run:
+        - name: "check-env"
+          script: 'echo "  Checking environment..."'
+      post_run:
+        - name: "notify-success"
+          script: 'echo "  Build succeeded! Task: $EZ_TASK_NAME"'
+        - name: "cleanup"
+          script: 'echo "  Cleaning temp files..."'
+
+  fail-with-hooks:
+    desc: "测试 on_error 钩子"
+    cmds:
+      - cmd: 'echo "Starting..."'
+      - cmd: 'exit 1'
+    ez-hooks:
+      on_error:
+        - name: "notify-failure"
+          script: 'echo "  Task failed with exit code: $EZ_TASK_EXIT_CODE"'

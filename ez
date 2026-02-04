@@ -311,9 +311,24 @@ cmd_run() {
         return 0
     fi
 
+    # pre_run 钩子
+    run_hooks "$taskfile" "$task" "pre_run" 0 ""
+
     echo -e "${BOLD}Running:${NC} ${cmd[*]}"
     echo ""
-    "${cmd[@]}"
+
+    # 执行任务并捕获输出和退出码
+    local task_output exit_code=0
+    task_output=$("${cmd[@]}" 2>&1) || exit_code=$?
+    echo "$task_output"
+
+    # post_run 或 on_error 钩子
+    if [[ $exit_code -eq 0 ]]; then
+        run_hooks "$taskfile" "$task" "post_run" "$exit_code" "$task_output"
+    else
+        run_hooks "$taskfile" "$task" "on_error" "$exit_code" "$task_output"
+        return $exit_code
+    fi
 }
 
 # -----------------------------------------------------------------------------

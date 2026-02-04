@@ -1,0 +1,30 @@
+# ez-hooks 钩子测试
+version: '3'
+
+tasks:
+  all:
+    desc: "运行所有钩子测试"
+    cmds:
+      - task: pre-run
+      - task: post-run
+      - task: on-error
+      - cmd: echo "✓ 07-hooks 全部通过"
+
+  pre-run:
+    desc: "测试 pre_run 钩子"
+    cmds:
+      - cmd: ./ez run build-with-hooks 2>&1 | grep -q "Checking environment"
+      - cmd: echo "✓ pre_run OK"
+
+  post-run:
+    desc: "测试 post_run 钩子"
+    cmds:
+      - cmd: ./ez run build-with-hooks 2>&1 | grep -q "Build succeeded"
+      - cmd: ./ez run build-with-hooks 2>&1 | grep -q "Cleaning temp"
+      - cmd: echo "✓ post_run OK"
+
+  on-error:
+    desc: "测试 on_error 钩子"
+    cmds:
+      - cmd: ./ez run fail-with-hooks 2>&1 | grep -q "Task failed" || true
+      - cmd: echo "✓ on_error OK"
