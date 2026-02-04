@@ -33,6 +33,9 @@ tasks:
       - cmd: echo "=== 阶段 6 测试 run ==="
       - cmd: ./ez run clean | grep -q "Cleaning" && echo "OK ez run clean"
       - cmd: ./ez run clean --dry-run | grep -q "Dry run" && echo "OK ez run dry-run"
+      - cmd: ./ez run hello EZ_NAME=Test --dry-run | grep -q "EZ_NAME=Test" && echo "OK ez run preset input"
+      - cmd: ./ez run build EZ_ARCH=aarch64 --dry-run | grep -q "EZ_ARCH=aarch64" && echo "OK ez run preset select"
+      - cmd: ./ez run hello EZ_NAME=World | grep -q "Hello, World" && echo "OK ez run execute"
       - cmd: echo ""
       - cmd: echo "=== 所有测试通过 ==="
 

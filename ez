@@ -133,6 +133,52 @@ cmd_show() {
 }
 
 # -----------------------------------------------------------------------------
+# 交互式参数选择
+# -----------------------------------------------------------------------------
+select_value() {
+    local name="$1" type="$2" options_json="$3" default="$4" help="$5"
+
+    # 所有交互输出到 stderr，只有结果输出到 stdout
+    echo -e "${BOLD}$name${NC}" >&2
+    [[ -n "$help" && "$help" != "null" ]] && echo -e "  ${CYAN}$help${NC}" >&2
+
+    if [[ "$type" == "select" ]]; then
+        local opts=()
+        while IFS= read -r opt; do
+            [[ -n "$opt" ]] && opts+=("$opt")
+        done < <(echo "$options_json" | "$YQ" eval '.[]' - 2>/dev/null)
+
+        if [[ ${#opts[@]} -gt 0 ]]; then
+            local i=1
+            for opt in "${opts[@]}"; do
+                local marker=""
+                [[ "$opt" == "$default" ]] && marker=" (default)"
+                echo "    $i) $opt$marker" >&2
+                ((i++))
+            done
+
+            while true; do
+                read -rp "  Choice [1-${#opts[@]}]: " choice </dev/tty
+                # 回车使用默认值
+                if [[ -z "$choice" && -n "$default" ]]; then
+                    echo "$default"
+                    return
+                fi
+                if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#opts[@]})); then
+                    echo "${opts[$((choice-1))]}"
+                    return
+                fi
+                echo "  无效选择，请重试" >&2
+            done
+        fi
+    fi
+
+    # input 类型或其他
+    read -rp "  Value [$default]: " value </dev/tty
+    echo "${value:-$default}"
+}
+
+# -----------------------------------------------------------------------------
 # 命令: run
 # -----------------------------------------------------------------------------
 cmd_run() {
@@ -152,6 +198,42 @@ cmd_run() {
             *) shift ;;
         esac
     done
+
+    # 收集 ez-params 参数（交互式）
+    if has_ez_params "$taskfile" "$task"; then
+        echo -e "${BOLD}Configure: ${GREEN}$task${NC}"
+        echo ""
+
+        local params_json
+        params_json=$(get_ez_params_json "$taskfile" "$task")
+        local count
+        count=$(echo "$params_json" | "$YQ" eval 'length' -)
+
+        for ((i=0; i<count; i++)); do
+            local pname ptype poptions pdefault phelp value
+            pname=$(echo "$params_json" | "$YQ" eval ".[$i].name" -)
+            ptype=$(echo "$params_json" | "$YQ" eval ".[$i].type // \"input\"" -)
+            poptions=$(echo "$params_json" | "$YQ" eval -o=json ".[$i].options // []" -)
+            pdefault=$(echo "$params_json" | "$YQ" eval ".[$i].default // \"\"" -)
+            phelp=$(echo "$params_json" | "$YQ" eval ".[$i].help // \"\"" -)
+
+            # 检查是否已预设
+            local varname="EZ_$(echo "$pname" | tr '[:lower:]-' '[:upper:]_')"
+            local preset=""
+            for v in "${extra_vars[@]}"; do
+                [[ "$v" == "$varname="* ]] && preset="${v#*=}"
+            done
+
+            if [[ -n "$preset" ]]; then
+                echo -e "${BOLD}$pname${NC}: $preset (preset)"
+                value="$preset"
+            else
+                value=$(select_value "$pname" "$ptype" "$poptions" "$pdefault" "$phelp")
+                extra_vars+=("$varname=$value")
+            fi
+            echo ""
+        done
+    fi
 
     # 构建命令
     local -a cmd=("$TASK" "-t" "$taskfile" "$task")
