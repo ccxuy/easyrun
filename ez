@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+#
+# EZ - go-task 智能前端
+#
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/ez-core.sh"
+
+# -----------------------------------------------------------------------------
+# 命令: version
+# -----------------------------------------------------------------------------
+cmd_version() {
+    echo "ez version $EZ_VERSION"
+    echo ""
+    echo "Dependencies:"
+    echo "  yq:   $("$YQ" --version 2>/dev/null | head -1)"
+    echo "  task: $("$TASK" --version 2>/dev/null | head -1)"
+}
+
+# -----------------------------------------------------------------------------
+# 命令: help
+# -----------------------------------------------------------------------------
+cmd_help() {
+    cat << 'EOF'
+EZ - go-task 智能前端
+
+用法:
+    ez <command> [options] [args]
+
+命令:
+    list              列出所有任务
+    show <task>       显示任务详情
+    run <task>        运行任务（交互式参数）
+    version           显示版本信息
+    help              显示帮助
+
+选项:
+    -t, --taskfile    指定 Taskfile 路径
+    --dry-run         只显示命令，不执行
+
+示例:
+    ez list
+    ez show build
+    ez run build
+    ez run build --dry-run
+EOF
+}
+
+# -----------------------------------------------------------------------------
+# 主入口
+# -----------------------------------------------------------------------------
+main() {
+    check_deps
+
+    local cmd="${1:-help}"
+    shift || true
+
+    case "$cmd" in
+        list|ls)      cmd_list "$@" ;;
+        show|info)    cmd_show "$@" ;;
+        run|exec)     cmd_run "$@" ;;
+        version|-v|--version)   cmd_version ;;
+        help|-h|--help)         cmd_help ;;
+        *)            die "未知命令: $cmd，运行 'ez help' 查看帮助" ;;
+    esac
+}
+
+main "$@"
