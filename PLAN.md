@@ -222,7 +222,7 @@ Running: ./dep/task -t Taskfile.yml build EZ_ARCH=aarch64
 | 版本 | 功能 | 变更文件 | 测试 |
 |------|------|----------|------|
 | 0.1.0 | 依赖安装 | `install-deps.sh` | 1.1-1.3 ✅ |
-| 0.1.1 | 核心函数库 | `lib/ez-core.sh` | 2.1-2.4 |
+| 0.1.1 | 核心函数库 | `lib/ez-core.sh` | 2.1-2.4 ✅ |
 | 0.1.2 | help/version | `ez` | 3.1-3.3 |
 | 0.1.3 | list 基础 | `ez` | 4.1-4.3 |
 | 0.1.4 | show 基础 | `ez` | 5.1-5.4 |
