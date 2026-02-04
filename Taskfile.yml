@@ -30,6 +30,10 @@ tasks:
       - cmd: ./ez show clean | grep -qv "Parameters" && echo "OK ez show clean no params"
       - cmd: ./ez show xxx 2>&1 | grep -q "未找到" && echo "OK ez show not found"
       - cmd: echo ""
+      - cmd: echo "=== 阶段 6 测试 run ==="
+      - cmd: ./ez run clean | grep -q "Cleaning" && echo "OK ez run clean"
+      - cmd: ./ez run clean --dry-run | grep -q "Dry run" && echo "OK ez run dry-run"
+      - cmd: echo ""
       - cmd: echo "=== 所有测试通过 ==="
 
   # ==========================================================================

@@ -133,6 +133,43 @@ cmd_show() {
 }
 
 # -----------------------------------------------------------------------------
+# 命令: run
+# -----------------------------------------------------------------------------
+cmd_run() {
+    local task="${1:-}"
+    shift || true
+    [[ -z "$task" ]] && die "用法: ez run <task> [options]"
+
+    local taskfile dry_run=false
+    taskfile=$(find_taskfile ".") || die "未找到 Taskfile"
+
+    # 解析选项
+    local -a extra_vars=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run) dry_run=true; shift ;;
+            *=*) extra_vars+=("$1"); shift ;;
+            *) shift ;;
+        esac
+    done
+
+    # 构建命令
+    local -a cmd=("$TASK" "-t" "$taskfile" "$task")
+    for v in "${extra_vars[@]}"; do
+        cmd+=("$v")
+    done
+
+    if $dry_run; then
+        echo -e "${BOLD}Dry run:${NC} ${cmd[*]}"
+        return 0
+    fi
+
+    echo -e "${BOLD}Running:${NC} ${cmd[*]}"
+    echo ""
+    "${cmd[@]}"
+}
+
+# -----------------------------------------------------------------------------
 # 主入口
 # -----------------------------------------------------------------------------
 main() {
