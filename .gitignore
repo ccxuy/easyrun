@@ -1,0 +1,3 @@
+# 下载的二进制文件 (通过 dep/install-deps.sh 安装)
+dep/task
+dep/yq
