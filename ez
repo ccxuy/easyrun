@@ -30,18 +30,25 @@ EZ - go-task 智能前端
     ez <command> [options] [args]
 
 命令:
-    list              列出所有任务
-    show <task>       显示任务详情
-    run <task>        运行任务（交互式参数）
-    plan list         列出所有计划
-    plan show <plan>  显示计划详情
-    plan run <plan>   执行计划
-    version           显示版本信息
-    help              显示帮助
+    list                列出所有任务
+    show <task>         显示任务详情
+    run <task>          运行任务（交互式参数）
+    plan list           列出所有计划
+    plan show <plan>    显示计划详情
+    plan run <plan>     执行计划
+    template list       列出可用模板
+    template show <tpl> 显示模板详情
+    template use <tpl>  使用模板生成任务
+    plugin list         列出已安装插件
+    plugin show <name>  显示插件详情
+    plugin run <name>   运行插件脚本
+    plugin install <url> 从 URL 安装插件
+    version             显示版本信息
+    help                显示帮助
 
 选项:
-    -t, --taskfile    指定 Taskfile 路径
-    --dry-run         只显示命令，不执行
+    --dry-run           只显示命令，不执行
+    --resume            恢复中断的计划
 
 示例:
     ez list
@@ -49,7 +56,10 @@ EZ - go-task 智能前端
     ez run build
     ez run build --dry-run
     ez plan list
-    ez plan run simple-deploy
+    ez plan run kernel-ci
+    ez template list
+    ez template use kernel-build --name=mykernel
+    ez plugin list
 EOF
 }
 
@@ -422,14 +432,15 @@ cmd_plan_show() {
 cmd_plan_run() {
     local plan="${1:-}"
     shift || true
-    [[ -z "$plan" ]] && die "用法: ez plan run <plan>"
+    [[ -z "$plan" ]] && die "用法: ez plan run <plan> [--dry-run] [--resume]"
 
-    local planfile dry_run=false
+    local planfile dry_run=false resume=false
     planfile=$(find_planfile) || die "未找到计划文件"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --dry-run) dry_run=true; shift ;;
+            --resume) resume=true; shift ;;
             *) shift ;;
         esac
     done
@@ -441,6 +452,17 @@ cmd_plan_run() {
     local taskfile
     taskfile=$(find_taskfile ".") || die "未找到 Taskfile"
 
+    # 状态文件
+    local state_dir=".ez-state"
+    local state_file="$state_dir/$plan.state"
+    mkdir -p "$state_dir"
+
+    local start_step=0
+    if $resume && [[ -f "$state_file" ]]; then
+        start_step=$(cat "$state_file")
+        echo -e "${YELLOW}⏩ 从步骤 $((start_step+1)) 恢复${NC}"
+    fi
+
     echo -e "${BOLD}========================================${NC}"
     echo -e "${BOLD}Plan: ${GREEN}$plan${NC}"
     echo -e "${BOLD}========================================${NC}"
@@ -451,16 +473,37 @@ cmd_plan_run() {
     local step_count
     step_count=$(echo "$steps_json" | "$YQ" eval 'length' -)
 
-    for ((i=0; i<step_count; i++)); do
-        local sname stask scheckpoint smatrix svars sprompt
+    for ((i=start_step; i<step_count; i++)); do
+        local sname stask scheckpoint smatrix svars sprompt swhen
         sname=$(echo "$steps_json" | "$YQ" eval ".[$i].name // \"step-$i\"" -)
         stask=$(echo "$steps_json" | "$YQ" eval ".[$i].task // \"\"" -)
         scheckpoint=$(echo "$steps_json" | "$YQ" eval ".[$i].checkpoint // false" -)
         smatrix=$(echo "$steps_json" | "$YQ" eval -o=json ".[$i].matrix // null" -)
         svars=$(echo "$steps_json" | "$YQ" eval -o=json ".[$i].vars // {}" -)
+        swhen=$(echo "$steps_json" | "$YQ" eval ".[$i].when // \"\"" -)
 
         local step_num=$((i+1))
+
+        # when 条件检查
+        if [[ -n "$swhen" && "$swhen" != "null" ]]; then
+            local env_var
+            env_var=$(echo "$swhen" | sed -n 's/.*env\.\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p')
+            if [[ -n "$env_var" ]]; then
+                local env_val="${!env_var:-}"
+                if [[ -z "$env_val" || "$env_val" == "false" || "$env_val" == "0" ]]; then
+                    echo -e "${DIM}[$step_num/$step_count] $sname (skipped: $env_var not set)${NC}"
+                    echo ""
+                    continue
+                fi
+            fi
+        fi
+
         echo -e "${BOLD}[$step_num/$step_count] $sname${NC}"
+
+        # 保存状态
+        if ! $dry_run; then
+            echo "$i" > "$state_file"
+        fi
 
         # 检查点
         if [[ "$scheckpoint" == "true" ]]; then
@@ -475,24 +518,7 @@ cmd_plan_run() {
 
         # 矩阵执行
         if [[ "$smatrix" != "null" ]]; then
-            local matrix_keys matrix_values
-            matrix_keys=$(echo "$smatrix" | "$YQ" eval 'keys | .[]' -)
-
-            # 简化: 只支持单维矩阵
-            local first_key first_values
-            first_key=$(echo "$matrix_keys" | head -1)
-            first_values=$(echo "$smatrix" | "$YQ" eval ".$first_key[]" -)
-
-            while IFS= read -r val; do
-                [[ -z "$val" ]] && continue
-                local var_name="EZ_$(echo "$first_key" | tr '[:lower:]-' '[:upper:]_')"
-                echo -e "  ${CYAN}→ $stask ($first_key=$val)${NC}"
-                if $dry_run; then
-                    echo "    [dry-run] $TASK -t $taskfile $stask $var_name=$val"
-                else
-                    "$TASK" -t "$taskfile" "$stask" "$var_name=$val"
-                fi
-            done <<< "$first_values"
+            _run_matrix_step "$taskfile" "$stask" "$smatrix" "$svars" "$dry_run"
             echo ""
             continue
         fi
@@ -516,9 +542,74 @@ cmd_plan_run() {
         echo ""
     done
 
+    # 完成后删除状态文件
+    rm -f "$state_file"
+
     echo -e "${BOLD}========================================${NC}"
     echo -e "${GREEN}✓ Plan completed: $plan${NC}"
     echo -e "${BOLD}========================================${NC}"
+}
+
+# 矩阵步骤执行 (支持多维)
+_run_matrix_step() {
+    local taskfile="$1" stask="$2" smatrix="$3" svars="$4" dry_run="$5"
+
+    local matrix_keys
+    matrix_keys=$(echo "$smatrix" | "$YQ" eval 'keys | .[]' -)
+    local key_array=()
+    while IFS= read -r k; do
+        [[ -n "$k" ]] && key_array+=("$k")
+    done <<< "$matrix_keys"
+
+    if [[ ${#key_array[@]} -eq 1 ]]; then
+        local key="${key_array[0]}"
+        local values
+        values=$(echo "$smatrix" | "$YQ" eval ".$key[]" -)
+        while IFS= read -r val; do
+            [[ -z "$val" ]] && continue
+            _run_matrix_task "$taskfile" "$stask" "$svars" "$key" "$val" "" "" "$dry_run"
+        done <<< "$values"
+    elif [[ ${#key_array[@]} -ge 2 ]]; then
+        local key1="${key_array[0]}" key2="${key_array[1]}"
+        local values1 values2
+        values1=$(echo "$smatrix" | "$YQ" eval ".$key1[]" -)
+        values2=$(echo "$smatrix" | "$YQ" eval ".$key2[]" -)
+        while IFS= read -r v1; do
+            [[ -z "$v1" ]] && continue
+            while IFS= read -r v2; do
+                [[ -z "$v2" ]] && continue
+                _run_matrix_task "$taskfile" "$stask" "$svars" "$key1" "$v1" "$key2" "$v2" "$dry_run"
+            done <<< "$values2"
+        done <<< "$values1"
+    fi
+}
+
+# 执行单个矩阵任务
+_run_matrix_task() {
+    local taskfile="$1" stask="$2" svars="$3"
+    local key1="$4" val1="$5" key2="$6" val2="$7" dry_run="$8"
+
+    local -a task_vars=()
+    local label="$key1=$val1"
+    [[ -n "$key2" ]] && label="$key1=$val1, $key2=$val2"
+
+    if [[ "$svars" != "{}" && "$svars" != "null" ]]; then
+        while IFS= read -r vkey; do
+            [[ -z "$vkey" ]] && continue
+            local vval
+            vval=$(echo "$svars" | "$YQ" eval ".$vkey" -)
+            vval="${vval//\{\{.${key1}\}\}/$val1}"
+            [[ -n "$key2" ]] && vval="${vval//\{\{.${key2}\}\}/$val2}"
+            task_vars+=("$vkey=$vval")
+        done < <(echo "$svars" | "$YQ" eval 'keys | .[]' -)
+    fi
+
+    echo -e "  ${CYAN}→ $stask ($label)${NC}"
+    if [[ "$dry_run" == "true" ]]; then
+        echo "    [dry-run] $TASK -t $taskfile $stask ${task_vars[*]}"
+    else
+        "$TASK" -t "$taskfile" "$stask" "${task_vars[@]}"
+    fi
 }
 
 # plan 命令路由
@@ -531,6 +622,292 @@ cmd_plan() {
         show)     cmd_plan_show "$@" ;;
         run)      cmd_plan_run "$@" ;;
         *)        die "未知 plan 子命令: $subcmd" ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
+# Template 模板命令
+# -----------------------------------------------------------------------------
+
+# 查找模板目录
+find_template_dir() {
+    local dirs=("$EZ_ROOT/templates" "$HOME/.ez/templates")
+    for d in "${dirs[@]}"; do
+        [[ -d "$d" ]] && echo "$d" && return 0
+    done
+    return 1
+}
+
+# template list - 列出可用模板
+cmd_template_list() {
+    local tpl_dir
+    tpl_dir=$(find_template_dir) || die "未找到模板目录"
+
+    echo -e "${BOLD}Templates in ${tpl_dir}:${NC}"
+    echo ""
+
+    for f in "$tpl_dir"/*.yml; do
+        [[ ! -f "$f" ]] && continue
+        local name desc
+        name=$("$YQ" eval '.name // ""' "$f")
+        desc=$("$YQ" eval '.desc // ""' "$f")
+        printf "  ${GREEN}%-20s${NC} %s\n" "$name" "$desc"
+    done
+}
+
+# template show - 显示模板详情
+cmd_template_show() {
+    local name="${1:-}"
+    [[ -z "$name" ]] && die "用法: ez template show <name>"
+
+    local tpl_dir tpl_file
+    tpl_dir=$(find_template_dir) || die "未找到模板目录"
+    tpl_file="$tpl_dir/$name.yml"
+    [[ ! -f "$tpl_file" ]] && die "模板未找到: $name"
+
+    local desc version
+    desc=$("$YQ" eval '.desc // ""' "$tpl_file")
+    version=$("$YQ" eval '.version // ""' "$tpl_file")
+
+    echo -e "${BOLD}Template: ${GREEN}$name${NC}"
+    echo -e "${BOLD}Version:${NC} $version"
+    echo ""
+    echo -e "${BOLD}Description:${NC} $desc"
+    echo ""
+    echo -e "${BOLD}Parameters:${NC}"
+
+    local params_json
+    params_json=$("$YQ" eval -o=json '.params // []' "$tpl_file")
+    local param_count
+    param_count=$(echo "$params_json" | "$YQ" eval 'length' -)
+
+    for ((i=0; i<param_count; i++)); do
+        local pname pdesc pdefault
+        pname=$(echo "$params_json" | "$YQ" eval ".[$i].name" -)
+        pdesc=$(echo "$params_json" | "$YQ" eval ".[$i].desc // \"\"" -)
+        pdefault=$(echo "$params_json" | "$YQ" eval ".[$i].default // \"\"" -)
+        echo -e "  ${CYAN}$pname${NC}"
+        echo "    $pdesc"
+        echo -e "    Default: ${GREEN}$pdefault${NC}"
+    done
+
+    echo ""
+    echo -e "${BOLD}Usage:${NC}"
+    echo "  ez template use $name --name=myproject"
+}
+
+# template use - 使用模板生成任务
+cmd_template_use() {
+    local name="${1:-}"
+    [[ -z "$name" ]] && die "用法: ez template use <name> [--param=value ...]"
+    shift || true
+
+    local tpl_dir tpl_file
+    tpl_dir=$(find_template_dir) || die "未找到模板目录"
+    tpl_file="$tpl_dir/$name.yml"
+    [[ ! -f "$tpl_file" ]] && die "模板未找到: $name"
+
+    # 解析参数
+    declare -A tpl_params
+    local params_json
+    params_json=$("$YQ" eval -o=json '.params // []' "$tpl_file")
+    local param_count
+    param_count=$(echo "$params_json" | "$YQ" eval 'length' -)
+
+    # 加载默认值
+    for ((i=0; i<param_count; i++)); do
+        local pname pdefault
+        pname=$(echo "$params_json" | "$YQ" eval ".[$i].name" -)
+        pdefault=$(echo "$params_json" | "$YQ" eval ".[$i].default // \"\"" -)
+        tpl_params["$pname"]="$pdefault"
+    done
+
+    # 覆盖命令行参数
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --*=*)
+                local key="${1%%=*}"
+                key="${key#--}"
+                local val="${1#*=}"
+                tpl_params["$key"]="$val"
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # 读取模板内容
+    local template
+    template=$("$YQ" eval '.template' "$tpl_file")
+
+    # 替换模板变量
+    for key in "${!tpl_params[@]}"; do
+        local val="${tpl_params[$key]}"
+        template="${template//\{\{.$key\}\}/$val}"
+    done
+
+    echo -e "${BOLD}Generated tasks:${NC}"
+    echo ""
+    echo "$template"
+    echo ""
+    echo -e "${YELLOW}提示: 将上述内容添加到 Taskfile.yml 的 tasks: 下${NC}"
+}
+
+# template 命令路由
+cmd_template() {
+    local subcmd="${1:-list}"
+    shift || true
+
+    case "$subcmd" in
+        list|ls)  cmd_template_list "$@" ;;
+        show)     cmd_template_show "$@" ;;
+        use)      cmd_template_use "$@" ;;
+        *)        die "未知 template 子命令: $subcmd" ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
+# Plugin 插件命令
+# -----------------------------------------------------------------------------
+
+# 查找插件目录
+find_plugin_dir() {
+    local dirs=("$EZ_ROOT/plugins" "$HOME/.ez/plugins")
+    for d in "${dirs[@]}"; do
+        [[ -d "$d" ]] && echo "$d" && return 0
+    done
+    return 1
+}
+
+# plugin list - 列出已安装插件
+cmd_plugin_list() {
+    local plugin_dir
+    plugin_dir=$(find_plugin_dir) || die "未找到插件目录"
+
+    echo -e "${BOLD}Plugins in ${plugin_dir}:${NC}"
+    echo ""
+
+    for ptype in param hook template; do
+        local type_dir="$plugin_dir/$ptype"
+        [[ ! -d "$type_dir" ]] && continue
+
+        local has_plugins=false
+        for f in "$type_dir"/*.yml; do
+            [[ ! -f "$f" ]] && continue
+            has_plugins=true
+            local name desc
+            name=$("$YQ" eval '.name // ""' "$f")
+            desc=$("$YQ" eval '.desc // ""' "$f")
+            printf "  ${GREEN}%-20s${NC} ${CYAN}[%s]${NC} %s\n" "$name" "$ptype" "$desc"
+        done
+    done
+}
+
+# plugin show - 显示插件详情
+cmd_plugin_show() {
+    local name="${1:-}"
+    [[ -z "$name" ]] && die "用法: ez plugin show <name>"
+
+    local plugin_dir
+    plugin_dir=$(find_plugin_dir) || die "未找到插件目录"
+
+    # 在各类型目录中搜索
+    local plugin_file=""
+    for ptype in param hook template; do
+        local f="$plugin_dir/$ptype/$name.yml"
+        if [[ -f "$f" ]]; then
+            plugin_file="$f"
+            break
+        fi
+    done
+
+    [[ -z "$plugin_file" ]] && die "插件未找到: $name"
+
+    local pname ptype pdesc pversion
+    pname=$("$YQ" eval '.name // ""' "$plugin_file")
+    ptype=$("$YQ" eval '.type // ""' "$plugin_file")
+    pdesc=$("$YQ" eval '.desc // ""' "$plugin_file")
+    pversion=$("$YQ" eval '.version // ""' "$plugin_file")
+
+    echo -e "${BOLD}Plugin: ${GREEN}$pname${NC}"
+    echo -e "${BOLD}Type:${NC} $ptype"
+    echo -e "${BOLD}Version:${NC} $pversion"
+    echo ""
+    echo -e "${BOLD}Description:${NC} $pdesc"
+    echo ""
+    echo -e "${BOLD}Script:${NC}"
+    "$YQ" eval '.script' "$plugin_file" | sed 's/^/  /'
+}
+
+# plugin run - 运行插件脚本
+cmd_plugin_run() {
+    local name="${1:-}"
+    [[ -z "$name" ]] && die "用法: ez plugin run <name>"
+
+    local plugin_dir
+    plugin_dir=$(find_plugin_dir) || die "未找到插件目录"
+
+    local plugin_file=""
+    for ptype in param hook template; do
+        local f="$plugin_dir/$ptype/$name.yml"
+        if [[ -f "$f" ]]; then
+            plugin_file="$f"
+            break
+        fi
+    done
+
+    [[ -z "$plugin_file" ]] && die "插件未找到: $name"
+
+    local script
+    script=$("$YQ" eval '.script' "$plugin_file")
+    eval "$script"
+}
+
+# plugin install - 从 URL 安装插件
+cmd_plugin_install() {
+    local url="${1:-}"
+    [[ -z "$url" ]] && die "用法: ez plugin install <url>"
+
+    local plugin_dir="$HOME/.ez/plugins"
+    mkdir -p "$plugin_dir"/{param,hook,template}
+
+    # 下载插件
+    local tmp_file
+    tmp_file=$(mktemp)
+    echo "Downloading from $url..."
+    if ! curl -sSL "$url" -o "$tmp_file"; then
+        rm -f "$tmp_file"
+        die "下载失败: $url"
+    fi
+
+    # 解析插件类型和名称
+    local pname ptype
+    pname=$("$YQ" eval '.name // ""' "$tmp_file")
+    ptype=$("$YQ" eval '.type // ""' "$tmp_file")
+
+    [[ -z "$pname" ]] && { rm -f "$tmp_file"; die "无效的插件文件: 缺少 name"; }
+    [[ -z "$ptype" ]] && { rm -f "$tmp_file"; die "无效的插件文件: 缺少 type"; }
+
+    local target_file="$plugin_dir/$ptype/$pname.yml"
+    mv "$tmp_file" "$target_file"
+
+    echo -e "${GREEN}✓ 插件已安装: $pname ($ptype)${NC}"
+    echo "  位置: $target_file"
+}
+
+# plugin 命令路由
+cmd_plugin() {
+    local subcmd="${1:-list}"
+    shift || true
+
+    case "$subcmd" in
+        list|ls)    cmd_plugin_list "$@" ;;
+        show)       cmd_plugin_show "$@" ;;
+        run)        cmd_plugin_run "$@" ;;
+        install)    cmd_plugin_install "$@" ;;
+        *)          die "未知 plugin 子命令: $subcmd" ;;
     esac
 }
 
@@ -548,6 +925,8 @@ main() {
         show|info)    cmd_show "$@" ;;
         run|exec)     cmd_run "$@" ;;
         plan)         cmd_plan "$@" ;;
+        template|tpl) cmd_template "$@" ;;
+        plugin)       cmd_plugin "$@" ;;
         version|-v|--version)   cmd_version ;;
         help|-h|--help)         cmd_help ;;
         *)            die "未知命令: $cmd，运行 'ez help' 查看帮助" ;;

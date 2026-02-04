@@ -1,0 +1,33 @@
+# Template 模板测试
+version: '3'
+
+tasks:
+  all:
+    desc: "运行所有 Template 测试"
+    cmds:
+      - task: tpl-list
+      - task: tpl-show
+      - task: tpl-use
+      - cmd: echo "✓ 09-template 全部通过"
+
+  tpl-list:
+    desc: "测试 template list"
+    cmds:
+      - cmd: ./ez template list | grep -q "kernel-build"
+      - cmd: ./ez template list | grep -q "service-deploy"
+      - cmd: echo "✓ template list OK"
+
+  tpl-show:
+    desc: "测试 template show"
+    cmds:
+      - cmd: ./ez template show kernel-build | grep -q "Linux 内核编译"
+      - cmd: ./ez template show kernel-build | grep -q "Parameters"
+      - cmd: echo "✓ template show OK"
+
+  tpl-use:
+    desc: "测试 template use"
+    cmds:
+      - cmd: ./ez template use kernel-build --name=test | grep -q "test-config"
+      - cmd: ./ez template use kernel-build --name=test | grep -q "test-build"
+      - cmd: ./ez template use service-deploy --service=api | grep -q "api-deploy"
+      - cmd: echo "✓ template use OK"

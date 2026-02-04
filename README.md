@@ -248,6 +248,85 @@ plans:
 | `ez plan run <plan>` | 执行计划 |
 | `ez plan run <plan> --dry-run` | 预览执行 |
 
+## Template 模板
+
+使用模板快速生成任务定义。
+
+### 查看可用模板
+
+```bash
+$ ./ez template list
+Templates in templates/:
+  kernel-build         Linux 内核编译任务模板
+  service-deploy       服务部署任务模板
+```
+
+### 使用模板
+
+```bash
+$ ./ez template use kernel-build --name=linux --arch=arm64
+Generated tasks:
+  linux-config:
+    desc: "配置内核 (linux)"
+    ...
+```
+
+### 自定义模板
+
+创建 `templates/my-template.yml`:
+
+```yaml
+name: my-template
+desc: "我的模板"
+version: "1.0"
+
+params:
+  - name: "name"
+    desc: "项目名称"
+    default: "myproject"
+
+template: |
+  {{.name}}-task:
+    desc: "任务 ({{.name}})"
+    cmds:
+      - echo "Hello from {{.name}}"
+```
+
+## Plugin 插件
+
+扩展 EZ 功能的插件系统。
+
+### 插件类型
+
+| 类型 | 说明 |
+|------|------|
+| `param` | 动态参数选项提供者 |
+| `hook` | 可复用的钩子脚本 |
+| `template` | 可复用的模板 |
+
+### 插件命令
+
+```bash
+ez plugin list              # 列出已安装插件
+ez plugin show <name>       # 显示插件详情
+ez plugin run <name>        # 运行插件脚本
+ez plugin install <url>     # 从 URL 安装插件
+```
+
+### 示例插件
+
+```yaml
+# plugins/param/git-branch.yml
+name: git-branch
+type: param
+desc: "动态获取 Git 分支列表"
+version: "1.0"
+
+script: |
+  #!/usr/bin/env bash
+  git branch --format='%(refname:short)'
+```
+
 ## 测试
 
 ```bash
@@ -265,6 +344,10 @@ easyrun/
 │   ├── install-deps.sh   # 依赖安装脚本
 │   ├── task              # go-task 二进制
 │   └── yq                # yq 二进制
+├── templates/            # 模板目录
+├── plugins/              # 插件目录
+│   ├── param/            # 参数插件
+│   └── hook/             # 钩子插件
 ├── task/selftest/        # 自测试套件
 ├── Taskfile.yml          # 示例任务
 ├── .ez-plan.yml          # 计划定义
@@ -274,7 +357,9 @@ easyrun/
 
 ## 版本历史
 
-- **v0.4.0** - Plan 计划编排 (list/show/run, matrix)
+- **v0.6.0** - Plugin 插件系统 (param/hook/template)
+- **v0.5.0** - Template 模板系统 (list/show/use)
+- **v0.4.0** - Plan 计划编排 (list/show/run, matrix, when)
 - **v0.3.0** - ez-hooks 钩子系统 (pre_run/post_run/on_error)
 - **v0.2.7** - 增强 show 命令展示
 - **v0.2.6** - query.url 远程选项获取

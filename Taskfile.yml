@@ -140,3 +140,99 @@ tasks:
       on_error:
         - name: "notify-failure"
           script: 'echo "  Task failed with exit code: $EZ_TASK_EXIT_CODE"'
+
+  # ==========================================================================
+  # Linux 内核模拟测试任务
+  # ==========================================================================
+  kernel-config:
+    desc: "配置内核选项"
+    cmds:
+      - cmd: 'echo "[config] ARCH={{.EZ_ARCH}} CONFIG={{.EZ_CONFIG}}"'
+      - cmd: 'echo "[config] 生成 .config 文件..."'
+    ez-params:
+      - name: "arch"
+        type: "select"
+        options: ["x86_64", "arm64", "riscv"]
+        default: "x86_64"
+        help: "目标架构"
+      - name: "config"
+        type: "select"
+        options: ["defconfig", "allmodconfig", "tinyconfig"]
+        default: "defconfig"
+        help: "配置模板"
+
+  kernel-build:
+    desc: "编译内核"
+    cmds:
+      - cmd: 'echo "[build] ARCH={{.EZ_ARCH}} JOBS={{.EZ_JOBS}}"'
+      - cmd: 'echo "[build] 编译中... (模拟)"'
+      - cmd: 'sleep 1'
+      - cmd: 'echo "[build] 生成 vmlinux bzImage"'
+    ez-params:
+      - name: "arch"
+        type: "select"
+        options: ["x86_64", "arm64", "riscv"]
+        default: "x86_64"
+        help: "目标架构"
+      - name: "jobs"
+        type: "input"
+        default: "4"
+        help: "并行编译数 (-j)"
+
+  kernel-test:
+    desc: "运行内核测试"
+    cmds:
+      - cmd: 'echo "[test] SUITE={{.EZ_SUITE}} on {{.EZ_MACHINE}}"'
+      - cmd: 'echo "[test] 运行测试套件..."'
+      - cmd: 'sleep 1'
+      - cmd: 'echo "[test] PASS: 42 FAIL: 0"'
+    ez-params:
+      - name: "suite"
+        type: "select"
+        options: ["unit", "smoke", "full", "stress"]
+        default: "smoke"
+        help: "测试套件"
+      - name: "machine"
+        type: "select"
+        options: ["qemu", "hw-x86", "hw-arm", "hw-riscv"]
+        default: "qemu"
+        help: "测试机器"
+
+  kernel-package:
+    desc: "打包内核"
+    cmds:
+      - cmd: 'echo "[package] FORMAT={{.EZ_FORMAT}} VERSION={{.EZ_VERSION}}"'
+      - cmd: 'echo "[package] 生成安装包..."'
+    ez-params:
+      - name: "format"
+        type: "select"
+        options: ["deb", "rpm", "tar.gz"]
+        default: "tar.gz"
+        help: "包格式"
+      - name: "version"
+        type: "input"
+        default: "6.8.0-test"
+        help: "版本号"
+
+  kernel-deploy:
+    desc: "部署内核到测试机"
+    cmds:
+      - cmd: 'echo "[deploy] TARGET={{.EZ_TARGET}} METHOD={{.EZ_METHOD}}"'
+      - cmd: 'echo "[deploy] 部署中..."'
+    ez-params:
+      - name: "target"
+        type: "select"
+        options: ["local", "vm-pool", "hw-lab"]
+        default: "local"
+        help: "部署目标"
+      - name: "method"
+        type: "select"
+        options: ["kexec", "reboot", "pxe"]
+        default: "kexec"
+        help: "部署方式"
+
+  kernel-report:
+    desc: "生成测试报告"
+    cmds:
+      - cmd: 'echo "[report] 汇总测试结果..."'
+      - cmd: 'echo "[report] 生成 report.html"'

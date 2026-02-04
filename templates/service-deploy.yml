@@ -1,0 +1,46 @@
+# 服务部署模板
+name: service-deploy
+desc: "服务部署任务模板"
+version: "1.0"
+
+params:
+  - name: "service"
+    desc: "服务名称"
+    default: "myapp"
+  - name: "port"
+    desc: "默认端口"
+    default: "8080"
+
+template: |
+  {{.service}}-build:
+    desc: "构建 {{.service}}"
+    cmds:
+      - 'echo "Building {{.service}}..."'
+      - docker build -t {{.service}}:$EZ_TAG .
+    ez-params:
+      - name: "tag"
+        type: "input"
+        default: "latest"
+        help: "镜像标签"
+
+  {{.service}}-deploy:
+    desc: "部署 {{.service}}"
+    cmds:
+      - 'echo "Deploying {{.service}} to $EZ_ENV"'
+      - kubectl apply -f k8s/$EZ_ENV/
+    ez-params:
+      - name: "env"
+        type: "select"
+        options: ["dev", "staging", "prod"]
+        default: "dev"
+        help: "部署环境"
+
+  {{.service}}-logs:
+    desc: "查看 {{.service}} 日志"
+    cmds:
+      - kubectl logs -f deployment/{{.service}} -n $EZ_NS
+    ez-params:
+      - name: "ns"
+        type: "input"
+        default: "default"
+        help: "命名空间"

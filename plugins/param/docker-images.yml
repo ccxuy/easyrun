@@ -1,0 +1,9 @@
+# EZ 插件示例 - Docker 镜像选择器
+name: docker-images
+type: param
+desc: "列出本地 Docker 镜像"
+version: "1.0"
+
+script: |
+  #!/usr/bin/env bash
+  docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | head -20

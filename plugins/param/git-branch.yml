@@ -1,0 +1,11 @@
+# EZ 插件示例 - Git 分支选择器
+# 安装位置: ~/.ez/plugins/param/git-branch.sh
+name: git-branch
+type: param
+desc: "动态获取 Git 分支列表"
+version: "1.0"
+
+# 执行此脚本输出选项列表 (每行一个)
+script: |
+  #!/usr/bin/env bash
+  git branch --format='%(refname:short)' 2>/dev/null | head -20

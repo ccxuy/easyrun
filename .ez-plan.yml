@@ -1,42 +1,129 @@
-# EZ Plan 示例
-# 用于测试计划编排功能
+# EZ Plan - Linux 内核测试场景
+# 模拟多架构编译、测试、部署流程
 
 plans:
-  simple-deploy:
-    desc: "简单部署流程"
+  # 简单构建流程
+  kernel-simple:
+    desc: "单架构内核构建"
     steps:
-      - name: "构建"
-        task: "build-with-hooks"
+      - name: "配置"
+        task: "kernel-config"
+        vars:
+          EZ_ARCH: "x86_64"
+          EZ_CONFIG: "defconfig"
+
+      - name: "编译"
+        task: "kernel-build"
+        vars:
+          EZ_ARCH: "x86_64"
+          EZ_JOBS: "8"
 
       - name: "测试"
-        task: "hello"
+        task: "kernel-test"
         vars:
-          EZ_NAME: "Test"
+          EZ_SUITE: "smoke"
+          EZ_MACHINE: "qemu"
 
-      - name: "清理"
-        task: "clean"
-
-  matrix-build:
-    desc: "矩阵构建示例"
+  # 矩阵构建 - 多架构
+  kernel-matrix:
+    desc: "多架构矩阵构建"
     steps:
-      - name: "多架构构建"
-        task: "build"
+      - name: "多架构编译"
+        task: "kernel-build"
         matrix:
-          arch: ["x86_64", "aarch64"]
+          arch: ["x86_64", "arm64", "riscv"]
         vars:
           EZ_ARCH: "{{.arch}}"
+          EZ_JOBS: "4"
 
-  with-checkpoint:
-    desc: "带断点的部署"
+  # 带断点的发布流程
+  kernel-release:
+    desc: "内核发布流程"
     steps:
-      - name: "构建"
-        task: "clean"
-
-      - name: "确认部署"
-        checkpoint: true
-        prompt: "构建完成，是否继续部署？"
-
-      - name: "部署"
-        task: "hello"
+      - name: "配置"
+        task: "kernel-config"
         vars:
-          EZ_NAME: "Production"
+          EZ_ARCH: "x86_64"
+          EZ_CONFIG: "defconfig"
+
+      - name: "编译"
+        task: "kernel-build"
+        vars:
+          EZ_ARCH: "x86_64"
+          EZ_JOBS: "16"
+
+      - name: "单元测试"
+        task: "kernel-test"
+        vars:
+          EZ_SUITE: "unit"
+          EZ_MACHINE: "qemu"
+
+      - name: "确认发布"
+        checkpoint: true
+        prompt: "单元测试通过，是否继续发布?"
+
+      - name: "打包"
+        task: "kernel-package"
+        vars:
+          EZ_FORMAT: "tar.gz"
+          EZ_VERSION: "6.8.0"
+
+      - name: "部署到测试环境"
+        task: "kernel-deploy"
+        vars:
+          EZ_TARGET: "vm-pool"
+          EZ_METHOD: "pxe"
+
+  # 条件执行示例
+  kernel-ci:
+    desc: "CI 流水线 (含条件)"
+    steps:
+      - name: "配置"
+        task: "kernel-config"
+        vars:
+          EZ_ARCH: "x86_64"
+          EZ_CONFIG: "defconfig"
+
+      - name: "编译"
+        task: "kernel-build"
+        vars:
+          EZ_ARCH: "x86_64"
+          EZ_JOBS: "8"
+
+      - name: "快速测试"
+        task: "kernel-test"
+        vars:
+          EZ_SUITE: "smoke"
+          EZ_MACHINE: "qemu"
+
+      - name: "完整测试"
+        task: "kernel-test"
+        when: "{{ env.CI_FULL_TEST }}"
+        vars:
+          EZ_SUITE: "full"
+          EZ_MACHINE: "hw-x86"
+
+      - name: "生成报告"
+        task: "kernel-report"
+
+  # 多机器测试
+  kernel-multihost:
+    desc: "多机器并行测试"
+    steps:
+      - name: "编译"
+        task: "kernel-build"
+        vars:
+          EZ_ARCH: "x86_64"
+          EZ_JOBS: "16"
+
+      - name: "多机测试"
+        task: "kernel-test"
+        matrix:
+          machine: ["qemu", "hw-x86", "hw-arm"]
+          suite: ["smoke", "unit"]
+        vars:
+          EZ_MACHINE: "{{.machine}}"
+          EZ_SUITE: "{{.suite}}"
+
+      - name: "汇总报告"
+        task: "kernel-report"

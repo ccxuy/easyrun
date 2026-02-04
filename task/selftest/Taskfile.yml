@@ -26,6 +26,12 @@ includes:
   plan:
     taskfile: ./08-plan.yml
     dir: ../..
+  template:
+    taskfile: ./09-template.yml
+    dir: ../..
+  plugin:
+    taskfile: ./10-plugin.yml
+    dir: ../..
 
 tasks:
   default:
@@ -50,6 +56,10 @@ tasks:
       - task: hooks:all
       - cmd: echo ""
       - task: plan:all
+      - cmd: echo ""
+      - task: template:all
+      - cmd: echo ""
+      - task: plugin:all
       - cmd: echo ""
       - cmd: echo "================================================"
       - cmd: echo "✓ 所有测试通过!"

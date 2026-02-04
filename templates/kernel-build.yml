@@ -1,0 +1,54 @@
+# Linux Kernel Build 模板
+name: kernel-build
+desc: "Linux 内核编译任务模板"
+version: "1.0"
+
+params:
+  - name: "name"
+    desc: "任务名称"
+    default: "kernel"
+  - name: "arch"
+    desc: "默认架构"
+    default: "x86_64"
+  - name: "jobs"
+    desc: "默认并行数"
+    default: "$(nproc)"
+
+template: |
+  {{.name}}-config:
+    desc: "配置内核 ({{.name}})"
+    cmds:
+      - 'echo "[config] ARCH=$EZ_ARCH CONFIG=$EZ_CONFIG"'
+      - make ARCH=$EZ_ARCH $EZ_CONFIG
+    ez-params:
+      - name: "arch"
+        type: "select"
+        options: ["x86_64", "arm64", "riscv"]
+        default: "{{.arch}}"
+        help: "目标架构"
+      - name: "config"
+        type: "select"
+        options: ["defconfig", "allmodconfig", "tinyconfig"]
+        default: "defconfig"
+        help: "配置模板"
+
+  {{.name}}-build:
+    desc: "编译内核 ({{.name}})"
+    cmds:
+      - 'echo "[build] ARCH=$EZ_ARCH JOBS=$EZ_JOBS"'
+      - make ARCH=$EZ_ARCH -j$EZ_JOBS
+    ez-params:
+      - name: "arch"
+        type: "select"
+        options: ["x86_64", "arm64", "riscv"]
+        default: "{{.arch}}"
+        help: "目标架构"
+      - name: "jobs"
+        type: "input"
+        default: "{{.jobs}}"
+        help: "并行编译数"
+
+  {{.name}}-clean:
+    desc: "清理构建 ({{.name}})"
+    cmds:
+      - make clean

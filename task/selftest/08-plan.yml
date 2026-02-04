@@ -8,27 +8,42 @@ tasks:
       - task: plan-list
       - task: plan-show
       - task: plan-run-dry
+      - task: plan-matrix
+      - task: plan-when
       - cmd: echo "✓ 08-plan 全部通过"
 
   plan-list:
-    desc: "测试 plan list 命令"
+    desc: "测试 plan list"
     cmds:
-      - cmd: ./ez plan list | grep -q "simple-deploy"
-      - cmd: ./ez plan list | grep -q "matrix-build"
-      - cmd: ./ez plan list | grep -q "with-checkpoint"
+      - cmd: ./ez plan list | grep -q "kernel-simple"
+      - cmd: ./ez plan list | grep -q "kernel-matrix"
       - cmd: echo "✓ plan list OK"
 
   plan-show:
-    desc: "测试 plan show 命令"
+    desc: "测试 plan show"
     cmds:
-      - cmd: ./ez plan show simple-deploy | grep -q "简单部署流程"
-      - cmd: ./ez plan show simple-deploy | grep -q "Steps"
-      - cmd: ./ez plan show simple-deploy | grep -q "build-with-hooks"
+      - cmd: ./ez plan show kernel-simple | grep -q "单架构内核构建"
+      - cmd: ./ez plan show kernel-simple | grep -q "kernel-config"
       - cmd: echo "✓ plan show OK"
 
   plan-run-dry:
     desc: "测试 plan run --dry-run"
     cmds:
-      - cmd: ./ez plan run simple-deploy --dry-run | grep -q "dry-run"
-      - cmd: ./ez plan run simple-deploy --dry-run | grep -q "Plan completed"
+      - cmd: ./ez plan run kernel-simple --dry-run | grep -q "dry-run"
+      - cmd: ./ez plan run kernel-simple --dry-run | grep -q "Plan completed"
       - cmd: echo "✓ plan run --dry-run OK"
+
+  plan-matrix:
+    desc: "测试矩阵执行"
+    cmds:
+      - cmd: ./ez plan run kernel-matrix --dry-run | grep -q "arch=x86_64"
+      - cmd: ./ez plan run kernel-matrix --dry-run | grep -q "arch=arm64"
+      - cmd: ./ez plan run kernel-multihost --dry-run | grep -q "machine=qemu, suite=smoke"
+      - cmd: echo "✓ plan matrix OK"
+
+  plan-when:
+    desc: "测试 when 条件"
+    cmds:
+      - cmd: ./ez plan run kernel-ci --dry-run | grep -q "skipped"
+      - cmd: CI_FULL_TEST=1 ./ez plan run kernel-ci --dry-run | grep -q "完整测试"
+      - cmd: echo "✓ plan when OK"

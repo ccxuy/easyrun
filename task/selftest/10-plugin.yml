@@ -1,0 +1,32 @@
+# Plugin 插件测试
+version: '3'
+
+tasks:
+  all:
+    desc: "运行所有 Plugin 测试"
+    cmds:
+      - task: plugin-list
+      - task: plugin-show
+      - task: plugin-run
+      - cmd: echo "✓ 10-plugin 全部通过"
+
+  plugin-list:
+    desc: "测试 plugin list"
+    cmds:
+      - cmd: ./ez plugin list | grep -q "git-branch"
+      - cmd: ./ez plugin list | grep -q "slack-notify"
+      - cmd: ./ez plugin list | grep -q "param"
+      - cmd: echo "✓ plugin list OK"
+
+  plugin-show:
+    desc: "测试 plugin show"
+    cmds:
+      - cmd: ./ez plugin show git-branch | grep -q "Git 分支"
+      - cmd: ./ez plugin show git-branch | grep -q "Script"
+      - cmd: echo "✓ plugin show OK"
+
+  plugin-run:
+    desc: "测试 plugin run"
+    cmds:
+      - cmd: ./ez plugin run git-branch | grep -q "main"
+      - cmd: echo "✓ plugin run OK"
