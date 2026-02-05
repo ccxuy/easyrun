@@ -327,6 +327,95 @@ script: |
   git branch --format='%(refname:short)'
 ```
 
+## 远程执行
+
+支持远程任务执行和多机器部署。
+
+### 远程任务
+
+```yaml
+# Taskfile.yml
+tasks:
+  remote-copy:
+    desc: "复制文件到远程主机"
+    cmds:
+      - scp $EZ_FILE $EZ_HOST:/tmp/
+    ez-params:
+      - name: "host"
+        type: "input"
+        help: "远程主机"
+      - name: "file"
+        type: "input"
+        help: "要传输的文件"
+
+  remote-exec:
+    desc: "在远程主机执行命令"
+    cmds:
+      - ssh $EZ_HOST "$EZ_CMD"
+    ez-params:
+      - name: "host"
+        type: "input"
+        help: "远程主机"
+      - name: "cmd"
+        type: "input"
+        help: "要执行的命令"
+```
+
+### 多机器部署计划
+
+```yaml
+# .ez-plan.yml
+plans:
+  multi-deploy:
+    desc: "多机器并行部署"
+    steps:
+      - name: "分发到各节点"
+        task: "remote-copy"
+        matrix:
+          host: ["node-1", "node-2", "node-3"]
+        vars:
+          EZ_HOST: "{{.host}}"
+          EZ_FILE: "app.tar.gz"
+```
+
+## 结果归档与统计
+
+自动记录和统计任务执行结果。
+
+### 归档结果
+
+```bash
+./ez run result-archive EZ_RUN_ID=run-001 EZ_STATUS=pass
+```
+
+### 查看统计
+
+```bash
+./ez run result-stats
+# 输出:
+# === 测试结果统计 ===
+# 总运行数: 10
+# 通过: 8
+# 失败: 2
+```
+
+## AI 插件
+
+支持 AI 增强功能（需要 API Key）。
+
+### AI 代码审查钩子
+
+```yaml
+# plugins/hook/ai-review.yml
+name: ai-review
+type: hook
+desc: "使用 AI 进行代码审查"
+script: |
+  curl -s https://api.openai.com/v1/chat/completions \
+    -H "Authorization: Bearer $OPENAI_API_KEY" \
+    -d '{"model":"gpt-4","messages":[...]}'
+```
+
 ## 测试
 
 ```bash
@@ -357,6 +446,7 @@ easyrun/
 
 ## 版本历史
 
+- **v0.7.0** - 远程执行、结果归档、AI 插件
 - **v0.6.0** - Plugin 插件系统 (param/hook/template)
 - **v0.5.0** - Template 模板系统 (list/show/use)
 - **v0.4.0** - Plan 计划编排 (list/show/run, matrix, when)

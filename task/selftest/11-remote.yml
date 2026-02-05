@@ -1,0 +1,34 @@
+# 远程执行和结果归档测试
+version: '3'
+
+tasks:
+  all:
+    desc: "运行所有远程和归档测试"
+    cmds:
+      - task: remote-tasks
+      - task: result-archive
+      - task: plan-remote
+      - cmd: echo "✓ 11-remote 全部通过"
+
+  remote-tasks:
+    desc: "测试远程执行任务"
+    cmds:
+      - cmd: ./ez show remote-copy | grep -q "远程主机"
+      - cmd: ./ez show remote-exec | grep -q "执行命令"
+      - cmd: ./ez run remote-copy EZ_HOST=test EZ_FILE=vmlinux --dry-run | grep -q "remote-copy"
+      - cmd: echo "✓ remote tasks OK"
+
+  result-archive:
+    desc: "测试结果归档"
+    cmds:
+      - cmd: ./ez show result-archive | grep -q "归档"
+      - cmd: ./ez show result-stats | grep -q "统计"
+      - cmd: echo "✓ result archive OK"
+
+  plan-remote:
+    desc: "测试远程部署计划"
+    cmds:
+      - cmd: ./ez plan list | grep -q "kernel-ci-full"
+      - cmd: ./ez plan list | grep -q "remote-kernel-deploy"
+      - cmd: ./ez plan run kernel-ci-full --dry-run | grep -q "result-archive"
+      - cmd: echo "✓ plan remote OK"

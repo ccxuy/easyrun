@@ -32,6 +32,9 @@ includes:
   plugin:
     taskfile: ./10-plugin.yml
     dir: ../..
+  remote:
+    taskfile: ./11-remote.yml
+    dir: ../..
 
 tasks:
   default:
@@ -60,6 +63,8 @@ tasks:
       - task: template:all
       - cmd: echo ""
       - task: plugin:all
+      - cmd: echo ""
+      - task: remote:all
       - cmd: echo ""
       - cmd: echo "================================================"
       - cmd: echo "✓ 所有测试通过!"

@@ -127,3 +127,59 @@ plans:
 
       - name: "汇总报告"
         task: "kernel-report"
+
+  # 完整 CI 流程 (含结果归档)
+  kernel-ci-full:
+    desc: "完整 CI 流程"
+    steps:
+      - name: "配置"
+        task: "kernel-config"
+        vars:
+          EZ_ARCH: "x86_64"
+          EZ_CONFIG: "defconfig"
+
+      - name: "编译"
+        task: "kernel-build"
+        vars:
+          EZ_ARCH: "x86_64"
+          EZ_JOBS: "8"
+
+      - name: "测试"
+        task: "kernel-test"
+        vars:
+          EZ_SUITE: "smoke"
+          EZ_MACHINE: "qemu"
+
+      - name: "归档结果"
+        task: "result-archive"
+        vars:
+          EZ_STATUS: "pass"
+
+      - name: "生成报告"
+        task: "kernel-report"
+
+  # 远程部署流程
+  remote-kernel-deploy:
+    desc: "远程内核部署"
+    steps:
+      - name: "检查远程主机"
+        task: "remote-status"
+        vars:
+          EZ_HOST: "node-1"
+
+      - name: "传输内核"
+        task: "remote-copy"
+        vars:
+          EZ_HOST: "node-1"
+          EZ_FILE: "vmlinux"
+
+      - name: "确认部署"
+        checkpoint: true
+        prompt: "文件已传输，是否在远程执行部署？"
+
+      - name: "远程部署"
+        task: "remote-exec"
+        vars:
+          EZ_HOST: "node-1"
+          EZ_CMD: "kexec -l /tmp/vmlinux"
+

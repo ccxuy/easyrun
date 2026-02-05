@@ -1,0 +1,38 @@
+# EZ 插件 - AI 代码审查
+name: ai-review
+type: hook
+desc: "使用 AI 进行代码审查 (需要 OPENAI_API_KEY)"
+version: "1.0"
+
+script: |
+  #!/usr/bin/env bash
+  # AI 代码审查钩子
+  # 在 post_run 中使用，审查任务输出
+
+  if [[ -z "$OPENAI_API_KEY" ]]; then
+    echo "[ai-review] OPENAI_API_KEY not set, skipping"
+    exit 0
+  fi
+
+  if [[ -z "$EZ_TASK_OUTPUT" ]]; then
+    echo "[ai-review] No task output to review"
+    exit 0
+  fi
+
+  echo "[ai-review] 正在分析任务输出..."
+
+  # 构造请求
+  PROMPT="分析以下任务输出，指出潜在问题:\n\n$EZ_TASK_OUTPUT"
+
+  # 调用 OpenAI API (简化示例)
+  RESPONSE=$(curl -s https://api.openai.com/v1/chat/completions \
+    -H "Authorization: Bearer $OPENAI_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"model\": \"gpt-4\",
+      \"messages\": [{\"role\": \"user\", \"content\": \"$PROMPT\"}],
+      \"max_tokens\": 500
+    }" 2>/dev/null | jq -r '.choices[0].message.content // "分析失败"')
+
+  echo "[ai-review] AI 分析结果:"
+  echo "$RESPONSE"

@@ -1,0 +1,55 @@
+# EZ 远程执行示例
+# 模拟远程任务执行
+
+plans:
+  # SSH 远程执行
+  remote-deploy:
+    desc: "远程部署内核"
+    steps:
+      - name: "本地编译"
+        task: "kernel-build"
+        vars:
+          EZ_ARCH: "x86_64"
+          EZ_JOBS: "16"
+
+      - name: "传输到远程"
+        task: "remote-copy"
+        vars:
+          EZ_HOST: "test-server-1"
+          EZ_FILE: "vmlinux"
+
+      - name: "远程部署"
+        task: "remote-exec"
+        vars:
+          EZ_HOST: "test-server-1"
+          EZ_CMD: "kexec -l /tmp/vmlinux && kexec -e"
+
+  # 多机器并行部署
+  multi-host-deploy:
+    desc: "多机器并行部署"
+    steps:
+      - name: "编译"
+        task: "kernel-build"
+        vars:
+          EZ_ARCH: "x86_64"
+          EZ_JOBS: "16"
+
+      - name: "分发到各节点"
+        task: "remote-copy"
+        matrix:
+          host: ["node-1", "node-2", "node-3"]
+        vars:
+          EZ_HOST: "{{.host}}"
+          EZ_FILE: "vmlinux"
+
+      - name: "确认部署"
+        checkpoint: true
+        prompt: "已分发到所有节点，是否开始部署？"
+
+      - name: "并行部署"
+        task: "remote-exec"
+        matrix:
+          host: ["node-1", "node-2", "node-3"]
+        vars:
+          EZ_HOST: "{{.host}}"
+          EZ_CMD: "systemctl restart kernel-test"

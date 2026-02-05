@@ -236,3 +236,91 @@ tasks:
     cmds:
       - cmd: 'echo "[report] 汇总测试结果..."'
       - cmd: 'echo "[report] 生成 report.html"'
+
+  # ==========================================================================
+  # 远程执行任务 (模拟)
+  # ==========================================================================
+  remote-copy:
+    desc: "复制文件到远程主机"
+    cmds:
+      - cmd: 'echo "[remote-copy] HOST={{.EZ_HOST}} FILE={{.EZ_FILE}}"'
+      - cmd: 'echo "[remote-copy] scp {{.EZ_FILE}} {{.EZ_HOST}}:/tmp/"'
+      - cmd: 'echo "[remote-copy] 传输完成"'
+    ez-params:
+      - name: "host"
+        type: "input"
+        default: "localhost"
+        help: "远程主机"
+      - name: "file"
+        type: "input"
+        default: "vmlinux"
+        help: "要传输的文件"
+
+  remote-exec:
+    desc: "在远程主机执行命令"
+    cmds:
+      - cmd: 'echo "[remote-exec] HOST={{.EZ_HOST}}"'
+      - cmd: 'echo "[remote-exec] CMD={{.EZ_CMD}}"'
+      - cmd: 'echo "[remote-exec] ssh {{.EZ_HOST}} \"{{.EZ_CMD}}\""'
+      - cmd: 'echo "[remote-exec] 执行完成"'
+    ez-params:
+      - name: "host"
+        type: "input"
+        default: "localhost"
+        help: "远程主机"
+      - name: "cmd"
+        type: "input"
+        default: "uname -a"
+        help: "要执行的命令"
+
+  remote-status:
+    desc: "检查远程主机状态"
+    cmds:
+      - cmd: 'echo "[remote-status] 检查 {{.EZ_HOST}} 状态..."'
+      - cmd: 'echo "[remote-status] 主机在线，负载正常"'
+    ez-params:
+      - name: "host"
+        type: "select"
+        query:
+          command: "echo -e 'node-1\nnode-2\nnode-3\ntest-server-1'"
+        help: "选择远程主机"
+
+  # ==========================================================================
+  # 结果归档和统计任务
+  # ==========================================================================
+  result-archive:
+    desc: "归档测试结果"
+    cmds:
+      - cmd: 'mkdir -p .ez-results/{{.EZ_RUN_ID}}'
+      - cmd: 'echo "{\"run_id\": \"{{.EZ_RUN_ID}}\", \"status\": \"{{.EZ_STATUS}}\", \"timestamp\": \"$(date -Iseconds)\"}" > .ez-results/{{.EZ_RUN_ID}}/meta.json'
+      - cmd: 'echo "[archive] 结果已归档到 .ez-results/{{.EZ_RUN_ID}}/"'
+    ez-params:
+      - name: "run_id"
+        type: "input"
+        default: "run-$(date +%Y%m%d-%H%M%S)"
+        help: "运行 ID"
+      - name: "status"
+        type: "select"
+        options: ["pass", "fail", "skip"]
+        default: "pass"
+        help: "运行状态"
+
+  result-stats:
+    desc: "显示测试统计"
+    cmds:
+      - cmd: 'echo "=== 测试结果统计 ==="'
+      - cmd: 'echo "总运行数: $(ls -1d .ez-results/*/ 2>/dev/null | wc -l || echo 0)"'
+      - cmd: 'echo "通过: $(grep -l "pass" .ez-results/*/meta.json 2>/dev/null | wc -l || echo 0)"'
+      - cmd: 'echo "失败: $(grep -l "fail" .ez-results/*/meta.json 2>/dev/null | wc -l || echo 0)"'
+
+  result-clean:
+    desc: "清理旧的测试结果"
+    cmds:
+      - cmd: 'echo "[clean] 保留最近 {{.EZ_KEEP}} 次运行结果"'
+      - cmd: 'ls -1dt .ez-results/*/ 2>/dev/null | tail -n +$(({{.EZ_KEEP}}+1)) | xargs -r rm -rf'
+      - cmd: 'echo "[clean] 清理完成"'
+    ez-params:
+      - name: "keep"
+        type: "input"
+        default: "10"
+        help: "保留的运行数量"

@@ -1,0 +1,33 @@
+# EZ 插件 - AI 配置建议
+name: ai-suggest
+type: param
+desc: "AI 生成配置建议 (模拟)"
+version: "1.0"
+
+script: |
+  #!/usr/bin/env bash
+  # AI 配置建议插件
+  # 根据上下文提供配置选项
+
+  # 模拟 AI 建议 (实际应调用 API)
+  case "${EZ_CONTEXT:-kernel}" in
+    kernel)
+      echo "defconfig"
+      echo "allmodconfig"
+      echo "tinyconfig"
+      echo "localmodconfig"
+      ;;
+    deploy)
+      echo "rolling"
+      echo "blue-green"
+      echo "canary"
+      ;;
+    test)
+      echo "smoke"
+      echo "regression"
+      echo "performance"
+      ;;
+    *)
+      echo "default"
+      ;;
+  esac
