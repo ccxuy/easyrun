@@ -38,17 +38,21 @@ EZ - go-task 智能前端
     plan run <plan>     执行计划
     template list       列出可用模板
     template show <tpl> 显示模板详情
-    template use <tpl>  使用模板生成任务
+    template use <tpl>  使用模板生成任务 (支持 ytt)
     plugin list         列出已安装插件
     plugin show <name>  显示插件详情
     plugin run <name>   运行插件脚本
     plugin install <url> 从 URL 安装插件
+    log list            列出最近日志
+    log show <pattern>  显示日志内容
+    log clean [days]    清理旧日志
     version             显示版本信息
     help                显示帮助
 
 选项:
     --dry-run           只显示命令，不执行
     --resume            恢复中断的计划
+    --log               记录任务执行日志
 
 示例:
     ez list
@@ -57,10 +61,47 @@ EZ - go-task 智能前端
     ez run build --dry-run
     ez plan list
     ez plan run kernel-ci
+    ez plan run kernel-ci --log
+    ez log list
+    ez log show kernel-build
     ez template list
     ez template use kernel-build --name=mykernel
+    ez template use kernel-matrix --name=linux --arches=x86_64,arm64
     ez plugin list
 EOF
+}
+
+# -----------------------------------------------------------------------------
+# 命令: log
+# -----------------------------------------------------------------------------
+cmd_log_list() {
+    local count="${1:-20}"
+    list_recent_logs "$count"
+}
+
+cmd_log_show() {
+    local pattern="${1:-}"
+    [[ -z "$pattern" ]] && die "用法: ez log show <pattern>"
+    show_log "$pattern"
+}
+
+cmd_log_clean() {
+    local days="${1:-7}"
+    init_log_dir
+    find "$EZ_LOG_DIR" -name "*.log" -mtime +"$days" -delete
+    echo -e "${GREEN}✓ 已清理 $days 天前的日志${NC}"
+}
+
+cmd_log() {
+    local subcmd="${1:-list}"
+    shift || true
+
+    case "$subcmd" in
+        list|ls)  cmd_log_list "$@" ;;
+        show)     cmd_log_show "$@" ;;
+        clean)    cmd_log_clean "$@" ;;
+        *)        die "未知 log 子命令: $subcmd" ;;
+    esac
 }
 
 # -----------------------------------------------------------------------------
@@ -432,15 +473,16 @@ cmd_plan_show() {
 cmd_plan_run() {
     local plan="${1:-}"
     shift || true
-    [[ -z "$plan" ]] && die "用法: ez plan run <plan> [--dry-run] [--resume]"
+    [[ -z "$plan" ]] && die "用法: ez plan run <plan> [--dry-run] [--resume] [--log]"
 
-    local planfile dry_run=false resume=false
+    local planfile dry_run=false resume=false enable_log=false
     planfile=$(find_planfile) || die "未找到计划文件"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --dry-run) dry_run=true; shift ;;
             --resume) resume=true; shift ;;
+            --log) enable_log=true; shift ;;
             *) shift ;;
         esac
     done
@@ -463,8 +505,15 @@ cmd_plan_run() {
         echo -e "${YELLOW}⏩ 从步骤 $((start_step+1)) 恢复${NC}"
     fi
 
+    # 设置日志上下文
+    export EZ_CURRENT_PLAN="$plan"
+    export EZ_RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
+
     echo -e "${BOLD}========================================${NC}"
     echo -e "${BOLD}Plan: ${GREEN}$plan${NC}"
+    if $enable_log; then
+        echo -e "${BOLD}Run ID: ${CYAN}$EZ_RUN_ID${NC}"
+    fi
     echo -e "${BOLD}========================================${NC}"
     echo ""
 
@@ -516,9 +565,12 @@ cmd_plan_run() {
             continue
         fi
 
+        # 设置步骤上下文
+        export EZ_CURRENT_STEP="$sname"
+
         # 矩阵执行
         if [[ "$smatrix" != "null" ]]; then
-            _run_matrix_step "$taskfile" "$stask" "$smatrix" "$svars" "$dry_run"
+            _run_matrix_step "$taskfile" "$stask" "$smatrix" "$svars" "$dry_run" "$enable_log"
             echo ""
             continue
         fi
@@ -536,6 +588,8 @@ cmd_plan_run() {
 
         if $dry_run; then
             echo "  [dry-run] $TASK -t $taskfile $stask ${task_vars[*]}"
+        elif $enable_log; then
+            run_task_with_log "$taskfile" "$stask" "${task_vars[@]}"
         else
             "$TASK" -t "$taskfile" "$stask" "${task_vars[@]}"
         fi
@@ -547,12 +601,15 @@ cmd_plan_run() {
 
     echo -e "${BOLD}========================================${NC}"
     echo -e "${GREEN}✓ Plan completed: $plan${NC}"
+    if $enable_log; then
+        echo -e "${CYAN}Logs: $EZ_LOG_DIR/${NC}"
+    fi
     echo -e "${BOLD}========================================${NC}"
 }
 
 # 矩阵步骤执行 (支持多维)
 _run_matrix_step() {
-    local taskfile="$1" stask="$2" smatrix="$3" svars="$4" dry_run="$5"
+    local taskfile="$1" stask="$2" smatrix="$3" svars="$4" dry_run="$5" enable_log="${6:-false}"
 
     local matrix_keys
     matrix_keys=$(echo "$smatrix" | "$YQ" eval 'keys | .[]' -)
@@ -567,7 +624,7 @@ _run_matrix_step() {
         values=$(echo "$smatrix" | "$YQ" eval ".$key[]" -)
         while IFS= read -r val; do
             [[ -z "$val" ]] && continue
-            _run_matrix_task "$taskfile" "$stask" "$svars" "$key" "$val" "" "" "$dry_run"
+            _run_matrix_task "$taskfile" "$stask" "$svars" "$key" "$val" "" "" "$dry_run" "$enable_log"
         done <<< "$values"
     elif [[ ${#key_array[@]} -ge 2 ]]; then
         local key1="${key_array[0]}" key2="${key_array[1]}"
@@ -578,7 +635,7 @@ _run_matrix_step() {
             [[ -z "$v1" ]] && continue
             while IFS= read -r v2; do
                 [[ -z "$v2" ]] && continue
-                _run_matrix_task "$taskfile" "$stask" "$svars" "$key1" "$v1" "$key2" "$v2" "$dry_run"
+                _run_matrix_task "$taskfile" "$stask" "$svars" "$key1" "$v1" "$key2" "$v2" "$dry_run" "$enable_log"
             done <<< "$values2"
         done <<< "$values1"
     fi
@@ -587,7 +644,7 @@ _run_matrix_step() {
 # 执行单个矩阵任务
 _run_matrix_task() {
     local taskfile="$1" stask="$2" svars="$3"
-    local key1="$4" val1="$5" key2="$6" val2="$7" dry_run="$8"
+    local key1="$4" val1="$5" key2="$6" val2="$7" dry_run="$8" enable_log="${9:-false}"
 
     local -a task_vars=()
     local label="$key1=$val1"
@@ -607,6 +664,8 @@ _run_matrix_task() {
     echo -e "  ${CYAN}→ $stask ($label)${NC}"
     if [[ "$dry_run" == "true" ]]; then
         echo "    [dry-run] $TASK -t $taskfile $stask ${task_vars[*]}"
+    elif [[ "$enable_log" == "true" ]]; then
+        run_task_with_log "$taskfile" "$stask" "${task_vars[@]}"
     else
         "$TASK" -t "$taskfile" "$stask" "${task_vars[@]}"
     fi
@@ -702,12 +761,51 @@ cmd_template_use() {
     [[ -z "$name" ]] && die "用法: ez template use <name> [--param=value ...]"
     shift || true
 
-    local tpl_dir tpl_file
+    local tpl_dir tpl_file is_ytt=false
     tpl_dir=$(find_template_dir) || die "未找到模板目录"
-    tpl_file="$tpl_dir/$name.yml"
-    [[ ! -f "$tpl_file" ]] && die "模板未找到: $name"
 
-    # 解析参数
+    # 检查是否为 ytt 模板
+    if [[ -f "$tpl_dir/$name.ytt.yml" ]]; then
+        tpl_file="$tpl_dir/$name.ytt.yml"
+        is_ytt=true
+    elif [[ -f "$tpl_dir/$name.yml" ]]; then
+        tpl_file="$tpl_dir/$name.yml"
+    else
+        die "模板未找到: $name"
+    fi
+
+    # ytt 模板处理
+    if $is_ytt; then
+        if [[ ! -x "$YTT" ]]; then
+            die "ytt 未安装，请运行: ./dep/install-deps.sh"
+        fi
+
+        # 构建 ytt 参数
+        local -a ytt_args=("-f" "$tpl_file")
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --*=*)
+                    local key="${1%%=*}"
+                    key="${key#--}"
+                    local val="${1#*=}"
+                    ytt_args+=("--data-value" "$key=$val")
+                    shift
+                    ;;
+                *)
+                    shift
+                    ;;
+            esac
+        done
+
+        echo -e "${BOLD}Generated tasks (ytt):${NC}"
+        echo ""
+        "$YTT" "${ytt_args[@]}"
+        echo ""
+        echo -e "${YELLOW}提示: 将上述内容添加到 Taskfile.yml${NC}"
+        return
+    fi
+
+    # 普通模板处理
     declare -A tpl_params
     local params_json
     params_json=$("$YQ" eval -o=json '.params // []' "$tpl_file")
@@ -927,6 +1025,7 @@ main() {
         plan)         cmd_plan "$@" ;;
         template|tpl) cmd_template "$@" ;;
         plugin)       cmd_plugin "$@" ;;
+        log)          cmd_log "$@" ;;
         version|-v|--version)   cmd_version ;;
         help|-h|--help)         cmd_help ;;
         *)            die "未知命令: $cmd，运行 'ez help' 查看帮助" ;;

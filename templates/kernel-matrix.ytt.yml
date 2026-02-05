@@ -1,0 +1,61 @@
+#@ load("@ytt:data", "data")
+#@ load("@ytt:template", "template")
+
+#! YTT 复杂模板示例 - 多架构内核构建
+#! 用法: ytt -f kernel-matrix.ytt.yml --data-value name=linux --data-value arches=x86_64,arm64,riscv
+
+version: '3'
+
+#@ def build_task(arch):
+#@   return {
+#@     "desc": "构建内核 ({}) - {}".format(data.values.name, arch),
+#@     "cmds": [
+#@       {"cmd": 'echo "[build] ARCH={} JOBS=$EZ_JOBS"'.format(arch)},
+#@       {"cmd": "make ARCH={} -j$EZ_JOBS".format(arch)}
+#@     ],
+#@     "ez-params": [
+#@       {"name": "jobs", "type": "input", "default": "$(nproc)", "help": "并行数"}
+#@     ]
+#@   }
+#@ end
+
+#@ def test_task(arch, suite):
+#@   return {
+#@     "desc": "测试 {} - {} ({})".format(data.values.name, suite, arch),
+#@     "cmds": [
+#@       {"cmd": 'echo "[test] ARCH={} SUITE={}"'.format(arch, suite)},
+#@       {"cmd": "make ARCH={} test-{}".format(arch, suite)}
+#@     ]
+#@   }
+#@ end
+
+tasks:
+  #! 为每个架构生成构建任务
+  #@ for arch in data.values.arches.split(","):
+  #@overlay/match missing_ok=True
+  #@ name = "{}-build-{}".format(data.values.name, arch)
+  #@yaml/text-templated-strings
+  (@= name @):
+    (@= template.replace(build_task(arch)) @)
+  #@ end
+
+  #! 为每个架构生成测试任务
+  #@ for arch in data.values.arches.split(","):
+  #@ for suite in ["unit", "smoke"]:
+  #@ name = "{}-test-{}-{}".format(data.values.name, arch, suite)
+  #@yaml/text-templated-strings
+  (@= name @):
+    (@= template.replace(test_task(arch, suite)) @)
+  #@ end
+  #@ end
+
+  #! 汇总任务
+  #@yaml/text-templated-strings
+  (@= data.values.name @)-all:
+    desc: "构建和测试所有架构"
+    deps:
+      #@ for arch in data.values.arches.split(","):
+      - (@= "{}-build-{}".format(data.values.name, arch) @)
+      #@ end
+    cmds:
+      - echo "All builds completed for (@= data.values.name @)"

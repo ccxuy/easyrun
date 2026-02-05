@@ -1,0 +1,30 @@
+# 日志系统测试
+version: '3'
+
+tasks:
+  all:
+    desc: "运行所有日志测试"
+    cmds:
+      - task: log-create
+      - task: log-list
+      - task: log-show
+      - cmd: echo "✓ 12-log 全部通过"
+
+  log-create:
+    desc: "创建测试日志"
+    cmds:
+      - cmd: ./ez plan run kernel-simple --log >/dev/null 2>&1 || true
+      - cmd: echo "✓ log create OK"
+
+  log-list:
+    desc: "测试 log list"
+    cmds:
+      - cmd: ./ez log list | grep -q "logs"
+      - cmd: echo "✓ log list OK"
+
+  log-show:
+    desc: "测试 log show"
+    cmds:
+      - cmd: ./ez log show kernel-config 2>/dev/null | grep -q "EZ Task Execution Log"
+      - cmd: ./ez log show kernel-config 2>/dev/null | grep -q "Exit Code:"
+      - cmd: echo "✓ log show OK"

@@ -69,6 +69,21 @@ install_task() {
     fi
 }
 
+# 下载 ytt (carvel)
+install_ytt() {
+    local os="$1" arch="$2"
+    local url="https://github.com/carvel-dev/ytt/releases/latest/download/ytt-${os}-${arch}"
+
+    info "下载 ytt: $url"
+    if curl -fsSL "$url" -o "$DEP_DIR/ytt"; then
+        chmod +x "$DEP_DIR/ytt"
+        ok "ytt 安装完成"
+    else
+        # ytt 是可选的，不报错
+        info "ytt 下载失败 (可选依赖)"
+    fi
+}
+
 # 验证安装
 verify() {
     echo ""
@@ -85,6 +100,12 @@ verify() {
     else
         err "task 不可执行"
     fi
+
+    if [[ -x "$DEP_DIR/ytt" ]]; then
+        ok "ytt: $("$DEP_DIR/ytt" --version 2>/dev/null | head -1)"
+    else
+        info "ytt: 未安装 (可选)"
+    fi
 }
 
 main() {
@@ -99,6 +120,7 @@ main() {
 
     install_yq "$os" "$arch"
     install_task "$os" "$arch"
+    install_ytt "$os" "$arch"
 
     verify
 

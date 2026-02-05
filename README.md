@@ -399,6 +399,81 @@ plans:
 # 失败: 2
 ```
 
+## 日志系统
+
+任务执行日志自动记录到 `.ez-logs/` 目录。
+
+### 启用日志
+
+```bash
+# 执行计划并记录日志
+./ez plan run kernel-ci --log
+
+# 输出:
+# Plan: kernel-ci
+# Run ID: 20260206-012610-362445
+# [1/3] 配置
+#   Log: .ez-logs/20260206-012610_kernel-config_20260206-012610-362445.log
+```
+
+### 日志命令
+
+```bash
+ez log list              # 列出最近日志
+ez log show <pattern>    # 显示日志内容
+ez log clean [days]      # 清理旧日志 (默认 7 天)
+```
+
+### 日志格式
+
+```
+================================================================================
+EZ Task Execution Log
+================================================================================
+Task:      kernel-config
+Plan:      kernel-simple
+Step:      配置
+Timestamp: 2026-02-06T01:26:10+08:00
+Host:      build-server
+User:      ci
+================================================================================
+
+Command: task -t ./Taskfile.yml kernel-config ...
+[实际输出...]
+
+================================================================================
+Exit Code: 0
+Duration:  3s
+================================================================================
+```
+
+## ytt 复杂模板
+
+支持 [ytt](https://carvel.dev/ytt/) 进行复杂模板生成。
+
+### 使用 ytt 模板
+
+```bash
+# 安装 ytt (可选)
+./dep/install-deps.sh
+
+# 使用 ytt 模板生成任务
+./ez template use kernel-matrix --name=linux --arches=x86_64,arm64,riscv
+```
+
+### ytt 模板示例
+
+```yaml
+#@ load("@ytt:data", "data")
+
+#@ for arch in data.values.arches.split(","):
+(@= data.values.name @)-build-(@= arch @):
+  desc: "构建内核 ((@= arch @))"
+  cmds:
+    - make ARCH=(@= arch @) -j$(nproc)
+#@ end
+```
+
 ## AI 插件
 
 支持 AI 增强功能（需要 API Key）。
@@ -446,6 +521,7 @@ easyrun/
 
 ## 版本历史
 
+- **v0.8.0** - 日志系统、ytt 模板支持
 - **v0.7.0** - 远程执行、结果归档、AI 插件
 - **v0.6.0** - Plugin 插件系统 (param/hook/template)
 - **v0.5.0** - Template 模板系统 (list/show/use)

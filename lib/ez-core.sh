@@ -6,11 +6,15 @@
 
 # 获取 EZ 根目录
 EZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EZ_VERSION="0.1.0"
+EZ_VERSION="0.8.0"
 
 # 本地二进制路径
 YQ="$EZ_ROOT/dep/yq"
 TASK="$EZ_ROOT/dep/task"
+YTT="$EZ_ROOT/dep/ytt"
+
+# 日志目录
+EZ_LOG_DIR="$EZ_ROOT/.ez-logs"
 
 # -----------------------------------------------------------------------------
 # 颜色定义
@@ -23,6 +27,138 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
+
+# -----------------------------------------------------------------------------
+# 日志系统
+# -----------------------------------------------------------------------------
+
+# 初始化日志目录
+init_log_dir() {
+    mkdir -p "$EZ_LOG_DIR"
+}
+
+# 生成日志文件路径
+# 格式: .ez-logs/YYYYMMDD-HHMMSS_<task>_<run_id>.log
+get_log_path() {
+    local task_name="$1"
+    local run_id="${2:-$(date +%s)}"
+    local timestamp=$(date +%Y%m%d-%H%M%S)
+    local safe_name=$(echo "$task_name" | tr '/:' '_')
+    echo "$EZ_LOG_DIR/${timestamp}_${safe_name}_${run_id}.log"
+}
+
+# 写入日志头部
+write_log_header() {
+    local log_file="$1"
+    local task_name="$2"
+    local plan_name="${3:-}"
+    local step_name="${4:-}"
+
+    cat >> "$log_file" << EOF
+================================================================================
+EZ Task Execution Log
+================================================================================
+Task:      $task_name
+Plan:      ${plan_name:--}
+Step:      ${step_name:--}
+Timestamp: $(date -Iseconds)
+Host:      $(hostname)
+User:      $(whoami)
+PWD:       $(pwd)
+================================================================================
+
+EOF
+}
+
+# 写入日志尾部
+write_log_footer() {
+    local log_file="$1"
+    local exit_code="$2"
+    local duration="$3"
+
+    cat >> "$log_file" << EOF
+
+================================================================================
+Exit Code: $exit_code
+Duration:  ${duration}s
+End Time:  $(date -Iseconds)
+================================================================================
+EOF
+}
+
+# 执行任务并记录日志
+run_task_with_log() {
+    local taskfile="$1"
+    local task_name="$2"
+    shift 2
+    local task_vars=("$@")
+
+    local plan_name="${EZ_CURRENT_PLAN:-}"
+    local step_name="${EZ_CURRENT_STEP:-}"
+    local run_id="${EZ_RUN_ID:-$(date +%s)}"
+
+    init_log_dir
+    local log_file
+    log_file=$(get_log_path "$task_name" "$run_id")
+
+    write_log_header "$log_file" "$task_name" "$plan_name" "$step_name"
+
+    echo -e "  ${DIM}Log: $log_file${NC}"
+
+    local start_time=$(date +%s)
+    local exit_code=0
+
+    # 执行任务并记录输出
+    {
+        echo "Command: $TASK -t $taskfile $task_name ${task_vars[*]}"
+        echo ""
+        "$TASK" -t "$taskfile" "$task_name" "${task_vars[@]}" 2>&1
+    } | tee -a "$log_file"
+    exit_code=${PIPESTATUS[0]}
+
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+
+    write_log_footer "$log_file" "$exit_code" "$duration"
+
+    # 创建符号链接便于查找最新日志
+    ln -sf "$(basename "$log_file")" "$EZ_LOG_DIR/latest_${task_name//[:\/]/_}.log"
+
+    return $exit_code
+}
+
+# 列出最近的日志
+list_recent_logs() {
+    local count="${1:-10}"
+    init_log_dir
+
+    echo -e "${BOLD}Recent logs in $EZ_LOG_DIR:${NC}"
+    echo ""
+
+    ls -1t "$EZ_LOG_DIR"/*.log 2>/dev/null | head -n "$count" | while read -r f; do
+        local fname=$(basename "$f")
+        local task=$(echo "$fname" | sed 's/^[0-9-]*_\([^_]*\)_.*/\1/')
+        local size=$(du -h "$f" | cut -f1)
+        printf "  ${GREEN}%-50s${NC} ${DIM}%s${NC}\n" "$fname" "$size"
+    done
+}
+
+# 查看日志
+show_log() {
+    local pattern="$1"
+    init_log_dir
+
+    local log_file
+    if [[ -f "$EZ_LOG_DIR/$pattern" ]]; then
+        log_file="$EZ_LOG_DIR/$pattern"
+    else
+        log_file=$(ls -1t "$EZ_LOG_DIR"/*"$pattern"*.log 2>/dev/null | head -1)
+    fi
+
+    [[ -z "$log_file" || ! -f "$log_file" ]] && die "日志未找到: $pattern"
+
+    cat "$log_file"
+}
 
 # -----------------------------------------------------------------------------
 # 错误处理

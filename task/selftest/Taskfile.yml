@@ -35,6 +35,9 @@ includes:
   remote:
     taskfile: ./11-remote.yml
     dir: ../..
+  log:
+    taskfile: ./12-log.yml
+    dir: ../..
 
 tasks:
   default:
@@ -65,6 +68,8 @@ tasks:
       - task: plugin:all
       - cmd: echo ""
       - task: remote:all
+      - cmd: echo ""
+      - task: log:all
       - cmd: echo ""
       - cmd: echo "================================================"
       - cmd: echo "✓ 所有测试通过!"
