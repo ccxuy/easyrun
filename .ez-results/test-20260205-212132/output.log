@@ -1,0 +1,223 @@
+task: [selftest:default] echo "================================================"
+================================================
+task: [selftest:default] echo "EZ 自测试套件"
+EZ 自测试套件
+task: [selftest:default] echo "================================================"
+================================================
+task: [selftest:default] echo ""
+
+task: [selftest:deps:yq] test -x ./dep/yq
+task: [selftest:deps:yq] ./dep/yq --version | grep -q "yq"
+task: [selftest:deps:yq] echo "✓ yq OK"
+✓ yq OK
+task: [selftest:deps:task-bin] test -x ./dep/task
+task: [selftest:deps:task-bin] ./dep/task --version | grep -qE "^[0-9]"
+task: [selftest:deps:task-bin] echo "✓ task OK"
+✓ task OK
+task: [selftest:deps:all] echo "✓ 01-deps 全部通过"
+✓ 01-deps 全部通过
+task: [selftest:default] echo ""
+
+task: [selftest:core:source] bash -c 'source lib/ez-core.sh && echo "✓ source OK"'
+✓ source OK
+task: [selftest:core:check-deps] bash -c 'source lib/ez-core.sh && check_deps && echo "✓ check_deps OK"'
+✓ check_deps OK
+task: [selftest:core:find-taskfile] bash -c 'source lib/ez-core.sh && find_taskfile . >/dev/null && echo "✓ find_taskfile OK"'
+✓ find_taskfile OK
+task: [selftest:core:get-tasks] bash -c 'source lib/ez-core.sh && get_tasks Taskfile.yml | grep -q hello && echo "✓ get_tasks OK"'
+✓ get_tasks OK
+task: [selftest:core:has-ez-params] bash -c 'source lib/ez-core.sh && has_ez_params Taskfile.yml hello && echo "✓ has_ez_params (true) OK"'
+✓ has_ez_params (true) OK
+task: [selftest:core:has-ez-params] bash -c 'source lib/ez-core.sh && ! has_ez_params Taskfile.yml clean && echo "✓ has_ez_params (false) OK"'
+✓ has_ez_params (false) OK
+task: [selftest:core:all] echo "✓ 02-core 全部通过"
+✓ 02-core 全部通过
+task: [selftest:default] echo ""
+
+task: [selftest:commands:help] ./ez help | grep -q "go-task"
+task: [selftest:commands:help] echo "✓ ez help OK"
+✓ ez help OK
+task: [selftest:commands:version] ./ez version | grep -q "ez version"
+task: [selftest:commands:version] echo "✓ ez version OK"
+✓ ez version OK
+task: [selftest:commands:list] ./ez list | grep -q "hello"
+task: [selftest:commands:list] ./ez list | grep -q "params"
+task: [selftest:commands:list] echo "✓ ez list OK"
+✓ ez list OK
+task: [selftest:commands:show] ./ez show hello | grep -q "name"
+task: [selftest:commands:show] ./ez show build | grep -q "Options"
+task: [selftest:commands:show] ./ez show clean | grep -qv "Parameters"
+task: [selftest:commands:show] ./ez show nonexistent 2>&1 | grep -q "未找到"
+task: [selftest:commands:show] echo "✓ ez show OK"
+✓ ez show OK
+task: [selftest:commands:run] ./ez run clean | grep -q "Cleaning"
+task: [selftest:commands:run] ./ez run clean --dry-run | grep -q "Dry run"
+task: [selftest:commands:run] ./ez run hello EZ_NAME=Test --dry-run | grep -q "EZ_NAME=Test"
+task: [selftest:commands:run] ./ez run build EZ_ARCH=aarch64 --dry-run | grep -q "EZ_ARCH=aarch64"
+task: [selftest:commands:run] ./ez run hello EZ_NAME=World | grep -q "Hello, World"
+task: [selftest:commands:run] echo "✓ ez run OK"
+✓ ez run OK
+task: [selftest:commands:all] echo "✓ 03-commands 全部通过"
+✓ 03-commands 全部通过
+task: [selftest:default] echo ""
+
+task: [selftest:nesting:_chain-a] echo "  chain-a executed"
+  chain-a executed
+task: [selftest:nesting:_chain-b] echo "  chain-b executed (after a)"
+  chain-b executed (after a)
+task: [selftest:nesting:_chain-c] echo "  chain-c executed (after b)"
+  chain-c executed (after b)
+task: [selftest:nesting:deps-chain] echo "✓ deps-chain OK (c->b->a order)"
+✓ deps-chain OK (c->b->a order)
+task: [selftest:nesting:task-call] echo "  parent start"
+  parent start
+task: [selftest:nesting:_child-task] echo "    child executed"
+    child executed
+task: [selftest:nesting:task-call] echo "  parent end"
+  parent end
+task: [selftest:nesting:task-call] echo "✓ task-call OK"
+✓ task-call OK
+task: [selftest:nesting:vars-passing] echo "  parent var = from-parent"
+  parent var = from-parent
+task: [selftest:nesting:_child-with-var] echo "    child received = passed-to-child"
+    child received = passed-to-child
+task: [selftest:nesting:vars-passing] echo "✓ vars-passing OK"
+✓ vars-passing OK
+task: [selftest:nesting:_parallel-3] echo "  parallel-3 done"
+task: [selftest:nesting:_parallel-2] echo "  parallel-2 done"
+  parallel-3 done
+task: [selftest:nesting:_parallel-1] echo "  parallel-1 done"
+  parallel-2 done
+  parallel-1 done
+task: [selftest:nesting:parallel-deps] echo "✓ parallel-deps OK (all deps completed)"
+✓ parallel-deps OK (all deps completed)
+task: [selftest:nesting:all] echo "✓ 04-nesting 全部通过"
+✓ 04-nesting 全部通过
+task: [selftest:default] echo ""
+
+task: [selftest:vars:global-vars] test "global-value" = "global-value"
+task: [selftest:vars:global-vars] echo "✓ global-vars OK (global-value)"
+✓ global-vars OK (global-value)
+task: [selftest:vars:local-vars] test "local-value" = "local-value"
+task: [selftest:vars:local-vars] test "overridden" = "overridden"
+task: [selftest:vars:local-vars] echo "✓ local-vars OK"
+✓ local-vars OK
+task: [selftest:vars:env-vars] test "$TEST_ENV" = "from-taskfile"
+task: [selftest:vars:env-vars] echo "✓ env-vars OK ($TEST_ENV)"
+✓ env-vars OK (from-taskfile)
+task: [selftest:vars:dynamic-vars] test "dynamic-result" = "dynamic-result"
+task: [selftest:vars:dynamic-vars] echo "✓ dynamic-vars OK (dynamic-result)"
+✓ dynamic-vars OK (dynamic-result)
+task: [selftest:vars:all] echo "✓ 05-vars 全部通过"
+✓ 05-vars 全部通过
+task: [selftest:default] echo ""
+
+task: [selftest:query:query-command] ./ez show git-checkout | grep -q "branch"
+task: [selftest:query:query-command] echo "✓ query.command show OK"
+✓ query.command show OK
+task: [selftest:query:query-preset-skip] ./ez run git-checkout EZ_BRANCH=test --dry-run 2>&1 | grep -qv "query:"
+task: [selftest:query:query-preset-skip] echo "✓ query.command preset skip OK"
+✓ query.command preset skip OK
+task: [selftest:query:query-url-preset] ./ez run fetch-ip EZ_FORMAT=Host --dry-run 2>&1 | grep -qv "fetch:"
+task: [selftest:query:query-url-preset] echo "✓ query.url preset skip OK"
+✓ query.url preset skip OK
+task: [selftest:query:all] echo "✓ 06-query 全部通过"
+✓ 06-query 全部通过
+task: [selftest:default] echo ""
+
+task: [selftest:hooks:pre-run] ./ez run build-with-hooks 2>&1 | grep -q "Checking environment"
+task: [selftest:hooks:pre-run] echo "✓ pre_run OK"
+✓ pre_run OK
+task: [selftest:hooks:post-run] ./ez run build-with-hooks 2>&1 | grep -q "Build succeeded"
+task: [selftest:hooks:post-run] ./ez run build-with-hooks 2>&1 | grep -q "Cleaning temp"
+task: [selftest:hooks:post-run] echo "✓ post_run OK"
+✓ post_run OK
+task: [selftest:hooks:on-error] ./ez run fail-with-hooks 2>&1 | grep -q "Task failed" || true
+task: [selftest:hooks:on-error] echo "✓ on_error OK"
+✓ on_error OK
+task: [selftest:hooks:all] echo "✓ 07-hooks 全部通过"
+✓ 07-hooks 全部通过
+task: [selftest:default] echo ""
+
+task: [selftest:plan:plan-list] ./ez plan list | grep -q "kernel-simple"
+task: [selftest:plan:plan-list] ./ez plan list | grep -q "kernel-matrix"
+task: [selftest:plan:plan-list] echo "✓ plan list OK"
+✓ plan list OK
+task: [selftest:plan:plan-show] ./ez plan show kernel-simple | grep -q "单架构内核构建"
+task: [selftest:plan:plan-show] ./ez plan show kernel-simple | grep -q "kernel-config"
+task: [selftest:plan:plan-show] echo "✓ plan show OK"
+✓ plan show OK
+task: [selftest:plan:plan-run-dry] ./ez plan run kernel-simple --dry-run | grep -q "dry-run"
+task: [selftest:plan:plan-run-dry] ./ez plan run kernel-simple --dry-run | grep -q "Plan completed"
+task: [selftest:plan:plan-run-dry] echo "✓ plan run --dry-run OK"
+✓ plan run --dry-run OK
+task: [selftest:plan:plan-matrix] ./ez plan run kernel-matrix --dry-run | grep -q "arch=x86_64"
+task: [selftest:plan:plan-matrix] ./ez plan run kernel-matrix --dry-run | grep -q "arch=arm64"
+task: [selftest:plan:plan-matrix] ./ez plan run kernel-multihost --dry-run | grep -q "machine=qemu, suite=smoke"
+task: [selftest:plan:plan-matrix] echo "✓ plan matrix OK"
+✓ plan matrix OK
+task: [selftest:plan:plan-when] ./ez plan run kernel-ci --dry-run | grep -q "skipped"
+task: [selftest:plan:plan-when] CI_FULL_TEST=1 ./ez plan run kernel-ci --dry-run | grep -q "完整测试"
+task: [selftest:plan:plan-when] echo "✓ plan when OK"
+✓ plan when OK
+task: [selftest:plan:all] echo "✓ 08-plan 全部通过"
+✓ 08-plan 全部通过
+task: [selftest:default] echo ""
+
+task: [selftest:template:tpl-list] ./ez template list | grep -q "kernel-build"
+task: [selftest:template:tpl-list] ./ez template list | grep -q "service-deploy"
+task: [selftest:template:tpl-list] echo "✓ template list OK"
+✓ template list OK
+task: [selftest:template:tpl-show] ./ez template show kernel-build | grep -q "Linux 内核编译"
+task: [selftest:template:tpl-show] ./ez template show kernel-build | grep -q "Parameters"
+task: [selftest:template:tpl-show] echo "✓ template show OK"
+✓ template show OK
+task: [selftest:template:tpl-use] ./ez template use kernel-build --name=test | grep -q "test-config"
+task: [selftest:template:tpl-use] ./ez template use kernel-build --name=test | grep -q "test-build"
+task: [selftest:template:tpl-use] ./ez template use service-deploy --service=api | grep -q "api-deploy"
+task: [selftest:template:tpl-use] echo "✓ template use OK"
+✓ template use OK
+task: [selftest:template:all] echo "✓ 09-template 全部通过"
+✓ 09-template 全部通过
+task: [selftest:default] echo ""
+
+task: [selftest:plugin:plugin-list] ./ez plugin list | grep -q "git-branch"
+task: [selftest:plugin:plugin-list] ./ez plugin list | grep -q "slack-notify"
+task: [selftest:plugin:plugin-list] ./ez plugin list | grep -q "param"
+task: [selftest:plugin:plugin-list] echo "✓ plugin list OK"
+✓ plugin list OK
+task: [selftest:plugin:plugin-show] ./ez plugin show git-branch | grep -q "Git 分支"
+task: [selftest:plugin:plugin-show] ./ez plugin show git-branch | grep -q "Script"
+task: [selftest:plugin:plugin-show] echo "✓ plugin show OK"
+✓ plugin show OK
+task: [selftest:plugin:plugin-run] ./ez plugin run git-branch | grep -q "main"
+task: [selftest:plugin:plugin-run] echo "✓ plugin run OK"
+✓ plugin run OK
+task: [selftest:plugin:all] echo "✓ 10-plugin 全部通过"
+✓ 10-plugin 全部通过
+task: [selftest:default] echo ""
+
+task: [selftest:remote:remote-tasks] ./ez show remote-copy | grep -q "远程主机"
+task: [selftest:remote:remote-tasks] ./ez show remote-exec | grep -q "执行命令"
+task: [selftest:remote:remote-tasks] ./ez run remote-copy EZ_HOST=test EZ_FILE=vmlinux --dry-run | grep -q "remote-copy"
+task: [selftest:remote:remote-tasks] echo "✓ remote tasks OK"
+✓ remote tasks OK
+task: [selftest:remote:result-archive] ./ez show result-archive | grep -q "归档"
+task: [selftest:remote:result-archive] ./ez show result-stats | grep -q "统计"
+task: [selftest:remote:result-archive] echo "✓ result archive OK"
+✓ result archive OK
+task: [selftest:remote:plan-remote] ./ez plan list | grep -q "kernel-ci-full"
+task: [selftest:remote:plan-remote] ./ez plan list | grep -q "remote-kernel-deploy"
+task: [selftest:remote:plan-remote] ./ez plan run kernel-ci-full --dry-run | grep -q "result-archive"
+task: [selftest:remote:plan-remote] echo "✓ plan remote OK"
+✓ plan remote OK
+task: [selftest:remote:all] echo "✓ 11-remote 全部通过"
+✓ 11-remote 全部通过
+task: [selftest:default] echo ""
+
+task: [selftest:default] echo "================================================"
+================================================
+task: [selftest:default] echo "✓ 所有测试通过!"
+✓ 所有测试通过!
+task: [selftest:default] echo "================================================"
+================================================

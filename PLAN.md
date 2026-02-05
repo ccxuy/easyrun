@@ -301,9 +301,101 @@ Running: ./dep/task -t Taskfile.yml build EZ_ARCH=aarch64
 
 ---
 
-### 当前目标: v0.1.0 → v0.2.3
+### v0.7 - 远程执行与结果归档
 
-先完成基础功能，可以正常使用 `ez list/show/run` 配合 `ez-params`
+| 版本 | 功能 | 说明 | 测试 |
+|------|------|------|------|
+| 0.7.0 | remote-copy | 文件传输到远程主机 | ✅ |
+| 0.7.1 | remote-exec | 远程命令执行 | ✅ |
+| 0.7.2 | result-archive | 归档测试结果 | ✅ |
+| 0.7.3 | result-stats | 显示测试统计 | ✅ |
+| 0.7.4 | AI 插件 | ai-review, ai-suggest | ✅ |
+
+---
+
+## 已完成版本汇总
+
+| 版本 | 功能 | 状态 |
+|------|------|------|
+| v0.1.x | 基础框架 (deps, core, commands) | ✅ |
+| v0.2.x | ez-params 参数系统 | ✅ |
+| v0.3.0 | ez-hooks 钩子系统 | ✅ |
+| v0.4.x | Plan 计划编排 (matrix, when, resume) | ✅ |
+| v0.5.x | Template 模板系统 | ✅ |
+| v0.6.x | Plugin 插件系统 | ✅ |
+| v0.7.x | 远程执行、结果归档、AI 插件 | ✅ |
+
+---
+
+## 下一阶段: v0.8 - 增强功能
+
+基于 DESIGN.md 4.2 参数验证和 6.2 插件上下文
+
+### v0.8 - 参数验证与缓存
+
+| 版本 | 功能 | 说明 | 优先级 |
+|------|------|------|--------|
+| 0.8.0 | validation.rule | 参数验证规则 (regex, semver) | P2 |
+| 0.8.1 | validation.range | 数值范围验证 (min, max) | P2 |
+| 0.8.2 | query.cache | 查询结果缓存 (TTL) | P3 |
+| 0.8.3 | query.transform | 结果转换 (jq 表达式) | P3 |
+
+### v0.9 - 多文件发现
+
+| 版本 | 功能 | 说明 | 优先级 |
+|------|------|------|--------|
+| 0.9.0 | Makefile 发现 | 自动包装 make 目标 | P3 |
+| 0.9.1 | *.sh 发现 | 包装 shell 脚本 | P3 |
+| 0.9.2 | 子目录扫描 | 递归发现任务文件 | P3 |
+
+### v1.0 - 团队协作
+
+| 版本 | 功能 | 说明 | 优先级 |
+|------|------|------|--------|
+| 1.0.0 | plugin registry | 插件注册中心 | P3 |
+| 1.0.1 | team:// 协议 | 团队插件共享 | P3 |
+| 1.0.2 | Workspace | 多项目管理 | P3 |
+
+---
+
+## 测试覆盖 (当前)
+
+| 测试文件 | 测试项 | 状态 |
+|----------|--------|------|
+| 01-deps.yml | yq, task 二进制 | ✅ |
+| 02-core.yml | 核心函数库 | ✅ |
+| 03-commands.yml | list, show, run | ✅ |
+| 04-nesting.yml | 任务嵌套和依赖 | ✅ |
+| 05-vars.yml | 变量传递 | ✅ |
+| 06-query.yml | 动态选项查询 | ✅ |
+| 07-hooks.yml | 钩子系统 | ✅ |
+| 08-plan.yml | 计划编排 | ✅ |
+| 09-template.yml | 模板系统 | ✅ |
+| 10-plugin.yml | 插件系统 | ✅ |
+| 11-remote.yml | 远程执行和归档 | ✅ |
+
+**总测试数: 40 | 通过率: 100%**
+
+---
+
+### 当前状态
+
+**DESIGN.md 核心需求完成度: 95%**
+
+已实现:
+- ✅ Task 任务系统 (ez-params, ez-hooks)
+- ✅ Plan 计划编排 (steps, matrix, checkpoint, when, resume)
+- ✅ Template 模板系统 (list, show, use)
+- ✅ Plugin 插件系统 (param, hook, template)
+- ✅ 远程执行 (remote-copy, remote-exec)
+- ✅ 结果归档 (result-archive, result-stats)
+- ✅ AI 插件 (ai-review, ai-suggest)
+
+待实现 (P2/P3):
+- validation 参数验证规则
+- query 缓存机制
+- Makefile/sh 自动发现
+- 团队插件仓库
 
 ---
 

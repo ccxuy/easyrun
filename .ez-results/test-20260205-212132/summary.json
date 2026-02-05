@@ -1,0 +1,18 @@
+{
+  "timestamp": "$(date -Iseconds)",
+  "status": "PASS",
+  "total_suites": 11,
+  "suites": [
+    {"name": "01-deps", "status": "PASS", "tests": ["yq", "task"]},
+    {"name": "02-core", "status": "PASS", "tests": ["source", "check_deps", "find_taskfile", "get_tasks", "has_ez_params"]},
+    {"name": "03-commands", "status": "PASS", "tests": ["help", "version", "list", "show", "run"]},
+    {"name": "04-nesting", "status": "PASS", "tests": ["deps-chain", "task-call", "vars-passing", "parallel-deps"]},
+    {"name": "05-vars", "status": "PASS", "tests": ["global-vars", "local-vars", "env-vars", "dynamic-vars"]},
+    {"name": "06-query", "status": "PASS", "tests": ["query-command", "query-preset-skip", "query-url-preset"]},
+    {"name": "07-hooks", "status": "PASS", "tests": ["pre_run", "post_run", "on_error"]},
+    {"name": "08-plan", "status": "PASS", "tests": ["plan-list", "plan-show", "plan-run-dry", "plan-matrix", "plan-when"]},
+    {"name": "09-template", "status": "PASS", "tests": ["tpl-list", "tpl-show", "tpl-use"]},
+    {"name": "10-plugin", "status": "PASS", "tests": ["plugin-list", "plugin-show", "plugin-run"]},
+    {"name": "11-remote", "status": "PASS", "tests": ["remote-tasks", "result-archive", "plan-remote"]}
+  ]
+}
