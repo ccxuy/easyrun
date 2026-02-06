@@ -18,10 +18,14 @@ easyrun/
 ├── dep/
 │   ├── task              # go-task 二进制
 │   ├── yq                # yq 二进制
-│   ├── go-task.md        # go-task 参考文档
-│   └── yq.md             # yq 参考文档
-├── install-deps.sh       # 依赖安装脚本
-├── Taskfile.yml          # 示例/测试文件
+│   └── install-deps.sh   # 依赖安装脚本
+├── skills/               # Skill 目录（自包含技能，v1.4）
+├── plans/                # Plan 定义
+├── Taskfile.yml          # 根 Taskfile（简单任务）
+├── .ez/                  # 运行时数据（按粒度组织，gitignore）
+│   ├── skills/<name>/    # 按 Skill 粒度（workspace/logs/artifacts）
+│   └── plans/<name>/     # 按 Plan 粒度（build/logs/state）
+├── task/selftest/        # 自测试套件
 ├── DESIGN.md             # 设计规格
 └── PLAN.md               # 本文件
 ```
@@ -313,6 +317,29 @@ Running: ./dep/task -t Taskfile.yml build EZ_ARCH=aarch64
 
 ---
 
+### v0.8 - 日志系统与 ytt 模板
+
+| 版本 | 功能 | 说明 | 测试 |
+|------|------|------|------|
+| 0.8.0 | 日志记录 | 任务执行日志到 .ez-logs/ | ✅ |
+| 0.8.1 | log list | 列出最近日志 | ✅ |
+| 0.8.2 | log show | 显示日志内容 | ✅ |
+| 0.8.3 | log clean | 清理旧日志 | ✅ |
+| 0.8.4 | ytt 模板 | 支持 ytt 复杂模板生成 | ✅ |
+
+---
+
+### v0.9 - 任务继承与组合
+
+| 版本 | 功能 | 说明 | 测试 |
+|------|------|------|------|
+| 0.9.0 | ez-extends | 任务继承基础任务 | ✅ |
+| 0.9.1 | ez-defaults | 覆盖继承的默认参数 | ✅ |
+| 0.9.2 | ez-compose | 组合多个任务顺序执行 | ✅ |
+| 0.9.3 | ez-log | 自定义日志目录和前缀 | ✅ |
+
+---
+
 ## 已完成版本汇总
 
 | 版本 | 功能 | 状态 |
@@ -324,37 +351,153 @@ Running: ./dep/task -t Taskfile.yml build EZ_ARCH=aarch64
 | v0.5.x | Template 模板系统 | ✅ |
 | v0.6.x | Plugin 插件系统 | ✅ |
 | v0.7.x | 远程执行、结果归档、AI 插件 | ✅ |
+| v0.8.x | 日志系统、ytt 模板支持 | ✅ |
+| v0.9.x | 任务继承、组合、自定义日志路径 | ✅ |
+| v1.0.x | Web Server/Client 分布式架构 | ✅ |
+| v1.1.0 | 命令重塑 + Skill-as-Folder + Tab 补全 | ✅ |
+| v1.2.0 | Plan 编译系统 | ✅ |
+| v1.3.0 | Workspace 隔离 + .ez/ 统一目录 | ✅ |
+| v1.4.0-beta | Skill 体系 + .ez/ 按粒度重组 | ✅ |
 
 ---
 
-## 下一阶段: v0.8 - 增强功能
+## 下一阶段: v1.0 - Web Server/Client 分布式架构
 
-基于 DESIGN.md 4.2 参数验证和 6.2 插件上下文
+基于 DESIGN.md 第九章分布式执行架构
 
-### v0.8 - 参数验证与缓存
-
-| 版本 | 功能 | 说明 | 优先级 |
-|------|------|------|--------|
-| 0.8.0 | validation.rule | 参数验证规则 (regex, semver) | P2 |
-| 0.8.1 | validation.range | 数值范围验证 (min, max) | P2 |
-| 0.8.2 | query.cache | 查询结果缓存 (TTL) | P3 |
-| 0.8.3 | query.transform | 结果转换 (jq 表达式) | P3 |
-
-### v0.9 - 多文件发现
+### v1.0 - Server 基础
 
 | 版本 | 功能 | 说明 | 优先级 |
 |------|------|------|--------|
-| 0.9.0 | Makefile 发现 | 自动包装 make 目标 | P3 |
-| 0.9.1 | *.sh 发现 | 包装 shell 脚本 | P3 |
-| 0.9.2 | 子目录扫描 | 递归发现任务文件 | P3 |
+| 1.0.0 | ez server start | 启动 HTTP 服务器 | P1 |
+| 1.0.1 | REST API 基础 | /api/v1/tasks, /api/v1/nodes | P1 |
+| 1.0.2 | SQLite 存储 | 节点、任务、执行记录 | P1 |
+| 1.0.3 | 静态 Web UI | 简单 Dashboard 页面 | P1 |
+| 1.0.4 | Dockerfile | Server 容器化部署 | P1 |
 
-### v1.0 - 团队协作
+### v1.1 - Client 代理
 
 | 版本 | 功能 | 说明 | 优先级 |
 |------|------|------|--------|
-| 1.0.0 | plugin registry | 插件注册中心 | P3 |
-| 1.0.1 | team:// 协议 | 团队插件共享 | P3 |
-| 1.0.2 | Workspace | 多项目管理 | P3 |
+| 1.1.0 | ez client start | 启动客户端代理 | P1 |
+| 1.1.1 | 节点注册 | 连接 Server 并注册 | P1 |
+| 1.1.2 | 心跳机制 | 定时上报状态 | P1 |
+| 1.1.3 | 任务执行 | 接收并执行任务 | P1 |
+| 1.1.4 | 日志上报 | 实时推送执行日志 | P1 |
+
+### v1.2 - 分布式执行
+
+| 版本 | 功能 | 说明 | 优先级 |
+|------|------|------|--------|
+| 1.2.0 | 任务分发 | Server 分配任务到 Client | P1 |
+| 1.2.1 | 矩阵执行 | 多节点并行矩阵任务 | P1 |
+| 1.2.2 | 结果聚合 | 收集各节点执行结果 | P1 |
+| 1.2.3 | 失败重试 | 任务失败自动重试 | P2 |
+
+### v1.3 - Web Dashboard
+
+| 版本 | 功能 | 说明 | 优先级 |
+|------|------|------|--------|
+| 1.3.0 | 节点总览 | 节点状态、资源监控 | P1 |
+| 1.3.1 | 任务中心 | 任务列表、快速执行 | P1 |
+| 1.3.2 | 执行监控 | 实时状态、日志流 | P1 |
+| 1.3.3 | 计划编排 | 可视化计划管理 | P2 |
+
+### v1.4 - 增强功能
+
+| 版本 | 功能 | 说明 | 优先级 |
+|------|------|------|--------|
+| 1.4.0 | Token 认证 | API 安全认证 | P1 |
+| 1.4.1 | 节点标签 | 按标签选择节点 | P2 |
+| 1.4.2 | docker-compose | 完整部署方案 | P1 |
+| 1.4.3 | WebSocket 日志 | 实时日志推送 | P2 |
+
+---
+
+### v1.1 - 命令重塑 + Task-as-Folder + Tab 补全
+
+| 版本 | 功能 | 说明 | 测试 |
+|------|------|------|------|
+| v1.1.0 | implicit run | `ez <task>` 直接执行, `ez` = `ez list` | ✅ |
+| 1.1.1 | Skill-as-Folder | `skills/` 目录自动发现, [skill] 标记 | ✅ |
+| 1.1.2 | ez new | 创建 `skills/<name>/Taskfile.yml + skill.yml` | ✅ |
+| 1.1.3 | ez check | 验证 Taskfile 语法和依赖 | ✅ |
+| 1.1.4 | Tab 补全 | `ez completion bash/zsh` 输出补全脚本 | ✅ |
+
+---
+
+### v1.2 - Plan 编译系统
+
+| 版本 | 功能 | 说明 | 测试 |
+|------|------|------|------|
+| 1.2.0 | plan new | 创建 `plans/<name>.yml` | ✅ |
+| 1.2.1 | plan add | 向 Plan 添加步骤 (--needs 依赖) | ✅ |
+| 1.2.2 | plan build | 编译为 `.ez/plans/<name>/build/Taskfile.yml` | ✅ |
+| 1.2.3 | plan check | 依赖完备性验证 (拓扑排序, 产物匹配) | ✅ |
+| 1.2.4 | plan run (v2) | build + check + execute 一体化 | ✅ |
+| 1.2.5 | implicit plan run | `ez plan <name>` = `ez plan run <name>` | ✅ |
+
+---
+
+### v1.3 - Workspace 隔离 + .ez/ 统一目录
+
+| 版本 | 功能 | 说明 | 测试 |
+|------|------|------|------|
+| 1.3.0 | .ez/ 统一目录 | build/workspace/artifacts/logs/state 收归 .ez/ | ✅ |
+| 1.3.1 | --workspace=auto | 自动创建隔离工作区执行 | ✅ |
+| 1.3.2 | --workspace=name | 指定工作区名称 | ✅ |
+
+---
+
+### v1.4 - Skill 体系 + .ez/ 按粒度重组
+
+| 版本 | 功能 | 说明 | 测试 |
+|------|------|------|------|
+| 1.4.0 | tasks/ → skills/ | Skill 术语体系，skills/ 目录 | ✅ |
+| 1.4.1 | skill.yml | AI-readable 元数据，skill 创建自动生成 | ✅ |
+| 1.4.2 | .ez/ 按粒度 | .ez/skills/<name>/ + .ez/plans/<name>/ | ✅ |
+| 1.4.3 | 默认 workspace | Skill 执行默认在 .ez/skills/<name>/workspace/ | ✅ |
+| 1.4.4 | --no-workspace | 在源码目录直接执行（opt-out） | ✅ |
+| 1.4.5 | ez skill | export/import 子命令 | ✅ |
+| 1.4.6 | ez clean | 按粒度清理运行时数据 | ✅ |
+
+---
+
+## v1.5+ - 长期规划
+
+### v1.5 - Server 资产管理 + 自动部署
+
+| 版本 | 功能 | 说明 | 优先级 |
+|------|------|------|--------|
+| 1.5.0 | assets 表 | Server 端 assets 数据库表 | P1 |
+| 1.5.1 | ez server import | 批量导入 CSV 资产 | P1 |
+| 1.5.2 | ez server deploy | SSH 自动部署 client 到资产 | P1 |
+| 1.5.3 | Web UI 扩展 | 资产导入/部署操作界面 | P2 |
+
+### 参数验证与缓存
+
+| 版本 | 功能 | 说明 | 优先级 |
+|------|------|------|--------|
+| 1.5.0 | validation.rule | 参数验证规则 (regex, semver) | P2 |
+| 1.5.1 | validation.range | 数值范围验证 (min, max) | P2 |
+| 1.5.2 | query.cache | 查询结果缓存 (TTL) | P3 |
+| 1.5.3 | query.transform | 结果转换 (jq 表达式) | P3 |
+
+### 多文件发现
+
+| 版本 | 功能 | 说明 | 优先级 |
+|------|------|------|--------|
+| 1.6.0 | Makefile 发现 | 自动包装 make 目标 | P3 |
+| 1.6.1 | *.sh 发现 | 包装 shell 脚本 | P3 |
+| 1.6.2 | 子目录扫描 | 递归发现任务文件 | P3 |
+
+### 团队协作
+
+| 版本 | 功能 | 说明 | 优先级 |
+|------|------|------|--------|
+| 1.7.0 | plugin registry | 插件注册中心 | P3 |
+| 1.7.1 | team:// 协议 | 团队插件共享 | P3 |
+| 1.7.2 | Workspace | 多项目管理 | P3 |
 
 ---
 
@@ -364,7 +507,7 @@ Running: ./dep/task -t Taskfile.yml build EZ_ARCH=aarch64
 |----------|--------|------|
 | 01-deps.yml | yq, task 二进制 | ✅ |
 | 02-core.yml | 核心函数库 | ✅ |
-| 03-commands.yml | list, show, run | ✅ |
+| 03-commands.yml | list, show, run, skill, clean | ✅ |
 | 04-nesting.yml | 任务嵌套和依赖 | ✅ |
 | 05-vars.yml | 变量传递 | ✅ |
 | 06-query.yml | 动态选项查询 | ✅ |
@@ -373,29 +516,45 @@ Running: ./dep/task -t Taskfile.yml build EZ_ARCH=aarch64
 | 09-template.yml | 模板系统 | ✅ |
 | 10-plugin.yml | 插件系统 | ✅ |
 | 11-remote.yml | 远程执行和归档 | ✅ |
+| 12-log.yml | 日志系统 | ✅ |
+| 13-inheritance.yml | 任务继承和组合 | ✅ |
+| 14-server.yml | Server/Client 分布式 | ✅ |
+| 16-plan-compile.yml | Plan 编译系统 | ✅ |
+| 17-workspace.yml | Workspace + Skill 默认 workspace | ✅ |
 
-**总测试数: 40 | 通过率: 100%**
+**总测试数: 59+ | 通过率: 100%**
 
 ---
 
 ### 当前状态
 
-**DESIGN.md 核心需求完成度: 95%**
+**当前版本: 1.4.0-beta**
 
 已实现:
 - ✅ Task 任务系统 (ez-params, ez-hooks)
 - ✅ Plan 计划编排 (steps, matrix, checkpoint, when, resume)
-- ✅ Template 模板系统 (list, show, use)
+- ✅ Template 模板系统 (list, show, use, ytt)
 - ✅ Plugin 插件系统 (param, hook, template)
 - ✅ 远程执行 (remote-copy, remote-exec)
 - ✅ 结果归档 (result-archive, result-stats)
 - ✅ AI 插件 (ai-review, ai-suggest)
+- ✅ 日志系统 (list, show, clean, 任务上下文)
+- ✅ 任务继承 (ez-extends, ez-defaults)
+- ✅ 任务组合 (ez-compose)
+- ✅ 自定义日志路径 (ez-log)
+- ✅ **Web Server** (REST API, WebSocket, Dashboard)
+- ✅ **Client Agent** (节点注册, 任务执行, 日志上报)
+- ✅ **Docker 部署** (Dockerfile, docker-compose)
+- ✅ **命令重塑** (implicit run, Skill-as-Folder, Tab 补全)
+- ✅ **Plan 编译** (plan new/add/build/check, 拓扑排序, 依赖验证)
+- ✅ **Workspace 隔离** (.ez/ 统一目录, --workspace 隔离执行)
+- ✅ **Skill 体系** (skills/ 目录, skill.yml 元数据, 默认 workspace)
+- ✅ **按粒度 .ez/** (.ez/skills/<name>/, .ez/plans/<name>/)
+- ✅ **Skill 管理** (ez skill export/import, ez clean)
 
-待实现 (P2/P3):
-- validation 参数验证规则
-- query 缓存机制
-- Makefile/sh 自动发现
-- 团队插件仓库
+待实现:
+- v1.5: Server 资产管理 + 自动部署
+- P2/P3: validation 参数验证、query 缓存、Makefile 发现
 
 ---
 
