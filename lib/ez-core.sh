@@ -14,15 +14,15 @@ TASK="$EZ_ROOT/dep/task"
 YTT="$EZ_ROOT/dep/ytt"
 
 # -----------------------------------------------------------------------------
-# 核心术语 (详见 DESIGN.md 第〇章)
+# 核心术语 (详见 DESIGN.md)
 # -----------------------------------------------------------------------------
-# Skill     技能    自包含的可复用执行单元（skills/ 子文件夹）
-# Plan      计划    多 Skill 的编排，可编译为 Taskfile
+# Task      任务    EZ 的核心单元，go-task task 的超集
+#   - 行内任务: 定义在根 Taskfile.yml 中
+#   - 文件夹任务: tasks/<name>/ 自包含目录，含 Taskfile.yml + task.yml
+# Plan      计划    多 Task 的编排，可编译为 Taskfile
 # Step      步骤    Plan 内的单个环节
-# Artifact  产物    Skill 的输出文件，可被下游 Skill 引用
+# Artifact  产物    Task 的输出文件，可被下游 Task 引用
 # Workspace 工作区  隔离的执行目录，防止污染源码
-#
-# go-task 术语: task = Taskfile.yml 条目（EZ 仅透传，不重新定义）
 #
 # 生命周期: pending → running → success / failed
 
@@ -36,8 +36,8 @@ EZ_STATE_DIR="$EZ_DIR/state"
 EZ_LOG_DIR="$EZ_DIR/logs"
 EZ_ARTIFACTS_DIR="$EZ_DIR/artifacts"
 
-# skills/ Skill 目录
-EZ_SKILLS_DIR="$EZ_ROOT/skills"
+# tasks/ 文件夹任务目录
+EZ_TASKS_DIR="$EZ_ROOT/tasks"
 
 # plans/ 计划目录
 EZ_PLANS_DIR="$EZ_ROOT/plans"
@@ -65,18 +65,18 @@ init_log_dir() {
 }
 
 # 生成日志文件路径
-# 格式: .ez/skills/<skill>/logs/YYYYMMDD-HHMMSS_<task>_<run_id>.log (skill 模式)
+# 格式: .ez/tasks/<name>/logs/YYYYMMDD-HHMMSS_<task>_<run_id>.log (文件夹任务模式)
 #    或: .ez/logs/YYYYMMDD-HHMMSS_<task>_<run_id>.log (全局模式)
 get_log_path() {
     local task_name="$1"
     local run_id="${2:-$(date +%s)}"
-    local skill_name="${3:-}"  # 可选: 关联的 skill 名称
+    local folder_name="${3:-}"  # 可选: 关联的文件夹任务名称
     local timestamp=$(date +%Y%m%d-%H%M%S)
     local safe_name=$(echo "$task_name" | tr '/:' '_')
 
     local log_dir
-    if [[ -n "$skill_name" ]]; then
-        log_dir=$(get_skill_log_dir "$skill_name")
+    if [[ -n "$folder_name" ]]; then
+        log_dir=$(get_task_log_dir "$folder_name")
     else
         log_dir="$EZ_LOG_DIR"
         mkdir -p "$log_dir"
@@ -239,7 +239,7 @@ find_taskfile() {
     return 1
 }
 
-# 检查任务是否存在（根 Taskfile 或 skills/ 文件夹）
+# 检查任务是否存在（根 Taskfile 或 tasks/ 文件夹）
 # 参数: $1 = Taskfile 路径, $2 = 任务名
 # 返回: 0 = 存在, 1 = 不存在
 task_exists() {
@@ -253,26 +253,26 @@ task_exists() {
         return 0
     fi
 
-    # 2. 检查 skills/ Skill
-    if is_skill "$task"; then
+    # 2. 检查 tasks/ 文件夹任务
+    if is_folder_task "$task"; then
         return 0
     fi
 
     return 1
 }
 
-# 检查是否是 Skill (skills/ 目录下的子文件夹)
+# 检查是否是文件夹任务 (tasks/ 目录下的子文件夹)
 # 参数: $1 = 名称
-# 返回: 0 = 是 Skill, 1 = 不是
-is_skill() {
+# 返回: 0 = 是文件夹任务, 1 = 不是
+is_folder_task() {
     local name="$1"
-    [[ -d "$EZ_SKILLS_DIR/$name" && -f "$EZ_SKILLS_DIR/$name/Taskfile.yml" ]]
+    [[ -d "$EZ_TASKS_DIR/$name" && -f "$EZ_TASKS_DIR/$name/Taskfile.yml" ]]
 }
 
-# 发现所有任务：根 Taskfile + skills/ 子文件夹
+# 发现所有任务：根 Taskfile + tasks/ 子文件夹
 # 参数: $1 = 根目录 (可选, 默认 ".")
-# 输出: 每行一个任务名，Skill 后缀 \t[skill]
-discover_skills() {
+# 输出: 每行一个任务名，文件夹任务后缀 \t[folder]
+discover_tasks() {
     local root="${1:-.}"
 
     # 1. 根 Taskfile 中的任务
@@ -283,23 +283,23 @@ discover_skills() {
         done < <(get_tasks "$taskfile")
     fi
 
-    # 2. skills/ 目录中的 Skill
-    if [[ -d "$EZ_SKILLS_DIR" ]]; then
-        for dir in "$EZ_SKILLS_DIR"/*/; do
+    # 2. tasks/ 目录中的文件夹任务
+    if [[ -d "$EZ_TASKS_DIR" ]]; then
+        for dir in "$EZ_TASKS_DIR"/*/; do
             [[ ! -d "$dir" ]] && continue
             if [[ -f "$dir/Taskfile.yml" || -f "$dir/Taskfile.yaml" ]]; then
                 local name
                 name=$(basename "$dir")
-                echo "${name}\t[skill]"
+                echo "${name}\t[folder]"
             fi
         done
     fi
 }
 
-# 获取 Skill 列表（仅返回名称）
-get_skills() {
-    if [[ -d "$EZ_SKILLS_DIR" ]]; then
-        for dir in "$EZ_SKILLS_DIR"/*/; do
+# 获取文件夹任务列表（仅返回名称）
+get_folder_tasks() {
+    if [[ -d "$EZ_TASKS_DIR" ]]; then
+        for dir in "$EZ_TASKS_DIR"/*/; do
             [[ ! -d "$dir" ]] && continue
             if [[ -f "$dir/Taskfile.yml" || -f "$dir/Taskfile.yaml" ]]; then
                 basename "$dir"
@@ -312,32 +312,32 @@ get_skills() {
 # 按粒度组织的目录 (v1.4)
 # -----------------------------------------------------------------------------
 
-# 获取 Skill 的运行时目录
-# 参数: $1 = skill 名称
-# 返回: .ez/skills/<name>/
-get_skill_dir() {
+# 获取文件夹任务的运行时目录
+# 参数: $1 = 任务名称
+# 返回: .ez/tasks/<name>/
+get_task_runtime_dir() {
     local name="$1"
-    echo "$EZ_DIR/skills/$name"
+    echo "$EZ_DIR/tasks/$name"
 }
 
-# 获取 Skill 的日志目录
-get_skill_log_dir() {
+# 获取文件夹任务的日志目录
+get_task_log_dir() {
     local name="$1"
-    local dir="$EZ_DIR/skills/$name/logs"
+    local dir="$EZ_DIR/tasks/$name/logs"
     mkdir -p "$dir"
     echo "$dir"
 }
 
-# 获取 Skill 的 workspace 目录
-get_skill_workspace_dir() {
+# 获取文件夹任务的 workspace 目录
+get_task_workspace_dir() {
     local name="$1"
-    echo "$EZ_DIR/skills/$name/workspace"
+    echo "$EZ_DIR/tasks/$name/workspace"
 }
 
-# 获取 Skill 的产物目录
-get_skill_artifacts_dir() {
+# 获取文件夹任务的产物目录
+get_task_artifacts_dir() {
     local name="$1"
-    local dir="$EZ_DIR/skills/$name/artifacts"
+    local dir="$EZ_DIR/tasks/$name/artifacts"
     mkdir -p "$dir"
     echo "$dir"
 }
@@ -366,15 +366,15 @@ get_plan_log_dir() {
     echo "$dir"
 }
 
-# 清理 Skill 或 Plan 的运行时数据
-# 参数: $1 = 名称, $2 = 类型 (skill|plan|all)
+# 清理 Task 或 Plan 的运行时数据
+# 参数: $1 = 名称, $2 = 类型 (task|plan|all)
 ez_clean() {
     local name="$1"
-    local type="${2:-skill}"
+    local type="${2:-task}"
 
     case "$type" in
-        skill)
-            rm -rf "$EZ_DIR/skills/$name"
+        task)
+            rm -rf "$EZ_DIR/tasks/$name"
             ;;
         plan)
             rm -rf "$EZ_DIR/plans/$name"
@@ -703,11 +703,11 @@ get_ez_inputs_json() {
 # 初始化产物目录
 init_artifacts_dir() {
     local run_id="${1:-$(date +%Y%m%d-%H%M%S)}"
-    local skill_name="${2:-}"  # 可选: 关联的 skill 名称
+    local folder_name="${2:-}"  # 可选: 关联的文件夹任务名称
 
     local artifact_dir
-    if [[ -n "$skill_name" ]]; then
-        artifact_dir=$(get_skill_artifacts_dir "$skill_name")
+    if [[ -n "$folder_name" ]]; then
+        artifact_dir=$(get_task_artifacts_dir "$folder_name")
         artifact_dir="$artifact_dir/$run_id"
     else
         artifact_dir="$EZ_ARTIFACTS_DIR/$run_id"
@@ -821,12 +821,12 @@ get_task_relations() {
 
 # 创建工作区
 # 参数: $1 = 工作区名称 (或 "auto" 自动生成)
-#        $2 = 关联 skill 名称 (可选; 如提供，创建到 .ez/skills/<name>/workspace/)
+#        $2 = 关联文件夹任务名称 (可选; 如提供，创建到 .ez/tasks/<name>/workspace/)
 # 输出: 工作区路径
 # 返回: 0 = 成功, 1 = 失败
 create_workspace() {
     local name="$1"
-    local skill_name="${2:-}"
+    local folder_name="${2:-}"
 
     # auto 模式: 生成唯一名称
     if [[ "$name" == "auto" ]]; then
@@ -834,9 +834,9 @@ create_workspace() {
     fi
 
     local ws_dir
-    if [[ -n "$skill_name" ]]; then
-        # Skill 默认 workspace: .ez/skills/<skill>/workspace/
-        ws_dir="$(get_skill_workspace_dir "$skill_name")"
+    if [[ -n "$folder_name" ]]; then
+        # 文件夹任务默认 workspace: .ez/tasks/<name>/workspace/
+        ws_dir="$(get_task_workspace_dir "$folder_name")"
     else
         # Ad-hoc workspace: .ez/workspace/<name>/
         ws_dir="$EZ_WORKSPACE_DIR/$name"

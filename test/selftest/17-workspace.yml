@@ -8,7 +8,7 @@ tasks:
       - task: workspace-auto
       - task: workspace-named
       - task: workspace-dry-run
-      - task: skill-default-workspace
+      - task: folder-task-workspace
       - task: ez-dir-structure
       - task: cleanup
       - cmd: echo "✓ 17-workspace 全部通过"
@@ -37,19 +37,19 @@ tasks:
       - cmd: test -d .ez/workspace/drytest
       - cmd: echo "✓ workspace dry-run OK"
 
-  skill-default-workspace:
-    desc: "测试 Skill 默认 workspace 执行"
+  folder-task-workspace:
+    desc: "测试文件夹任务默认 workspace 执行"
     cmds:
-      # 创建测试 Skill
-      - cmd: ./ez new ws-test-skill
+      # 创建测试文件夹任务
+      - cmd: ./ez new ws-test-task
       # 默认执行（在 workspace 中）
-      - cmd: ./ez ws-test-skill | grep -q "Skill:"
-      - cmd: test -d .ez/skills/ws-test-skill/workspace
+      - cmd: ./ez ws-test-task | grep -q "Task:"
+      - cmd: test -d .ez/tasks/ws-test-task/workspace
       # --no-workspace 直接执行
-      - cmd: ./ez ws-test-skill --no-workspace | grep -q "[skill]"
+      - cmd: ./ez ws-test-task --no-workspace | grep -q "[folder]"
       # 清理
-      - cmd: rm -rf skills/ws-test-skill .ez/skills/ws-test-skill
-      - cmd: echo "✓ skill default workspace OK"
+      - cmd: rm -rf tasks/ws-test-task .ez/tasks/ws-test-task
+      - cmd: echo "✓ folder-task workspace OK"
 
   ez-dir-structure:
     desc: "测试 .ez/ 按粒度目录结构"

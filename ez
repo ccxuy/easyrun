@@ -34,18 +34,18 @@ EZ - go-task 智能前端
 核心命令:
     <name> [KEY=val]    直接执行 (implicit run)
     list [keyword]      列出任务 (支持搜索过滤, -a 全部, -f 平铺)
-    show <name>         显示详情 (含 skill.yml 元数据)
+    show <name>         显示详情 (含 task.yml 元数据)
     run <name>          运行 (交互式参数)
     browse [keyword]    交互式浏览器 (↑↓导航)
-    new <name>          创建 Skill (skills/<name>/)
+    new <name>          创建文件夹任务 (tasks/<name>/)
     check [name]        验证语法和依赖完整性
     clean <name>        清理运行时数据 (--all 全部)
 
-Skill 管理:
-    skill list          列出所有 Skill
-    skill show <name>   显示 skill.yml 元数据
-    skill export <name> 导出为 .tar.gz
-    skill import <path> 导入 Skill
+任务管理:
+    export <name>     导出文件夹任务为 .tar.gz
+    import <path>     导入文件夹任务
+
+
 
 计划命令:
     plan                列出所有计划
@@ -77,7 +77,7 @@ Skill 管理:
     --log               记录执行日志
     --node=<node>       在指定远程节点执行
     --workspace=<name>  在隔离工作区执行 (auto 自动命名)
-    --no-workspace      Skill 跳过默认 workspace
+    --no-workspace      跳过默认 workspace，在源目录执行
     --resume            恢复中断的计划
 
 示例:
@@ -86,11 +86,11 @@ Skill 管理:
     ez hello EZ_NAME=World      # 带参数执行
     ez list kernel              # 搜索含 kernel 的任务
     ez show build               # 查看详情
-    ez new my-skill             # 创建 skills/my-skill/
+    ez new my-task              # 创建 tasks/my-task/
     ez check                    # 验证所有任务
     ez plan run kernel-ci       # 执行计划
-    ez clean my-skill           # 清理运行时数据
-    ez skill export my-skill    # 导出 Skill
+    ez clean my-task            # 清理运行时数据
+    ez export my-task          # 导出文件夹任务
 
 Tab 补全:
     eval "$(ez completion bash)"    # Bash
@@ -153,7 +153,7 @@ cmd_list() {
 
     # 收集根 Taskfile 任务
     local visible_tasks=()
-    local task_sources=()  # 标记来源: "" = 根, "[skill]" = Skill 文件夹
+    local task_sources=()  # 标记来源: "" = 根, "[folder]" = 文件夹任务
     while IFS= read -r name; do
         [[ -z "$name" ]] && continue
         if [[ "$name" == _* ]] && ! $show_all; then
@@ -166,8 +166,8 @@ cmd_list() {
         task_sources+=("")
     done <<< "$tasks"
 
-    # 收集 Skill (skills/ 目录)
-    if [[ -d "$EZ_SKILLS_DIR" ]]; then
+    # 收集文件夹任务 (tasks/ 目录)
+    if [[ -d "$EZ_TASKS_DIR" ]]; then
         while IFS= read -r name; do
             [[ -z "$name" ]] && continue
             if [[ -n "$filter" ]] && [[ "$name" != *"$filter"* ]]; then
@@ -180,9 +180,9 @@ cmd_list() {
             done
             if ! $dup; then
                 visible_tasks+=("$name")
-                task_sources+=("[skill]")
+                task_sources+=("[folder]")
             fi
-        done < <(get_skills)
+        done < <(get_folder_tasks)
     fi
 
     local total=${#visible_tasks[@]}
@@ -201,11 +201,11 @@ cmd_list() {
             local source="${task_sources[$idx]}"
             local desc="" flags=""
 
-            if [[ "$source" == "[skill]" ]]; then
-                # Skill：从 skills/ 子目录 Taskfile 读取描述
-                local ftfile="$EZ_SKILLS_DIR/$name/Taskfile.yml"
+            if [[ "$source" == "[folder]" ]]; then
+                # 文件夹任务：从 tasks/ 子目录 Taskfile 读取描述
+                local ftfile="$EZ_TASKS_DIR/$name/Taskfile.yml"
                 desc=$(get_task_prop "$ftfile" "default" "desc" 2>/dev/null || true)
-                flags=" ${MAGENTA}[skill]${NC}"
+                flags=" ${MAGENTA}[folder]${NC}"
             else
                 desc=$(get_task_prop "$taskfile" "$name" "desc")
                 has_ez_params "$taskfile" "$name" && flags+=" ${CYAN}[params]${NC}"
@@ -249,10 +249,10 @@ cmd_list() {
             local source="${no_prefix_sources[$idx]}"
             local desc=""
             local flags=""
-            if [[ "$source" == "[skill]" ]]; then
-                local ftfile="$EZ_SKILLS_DIR/$name/Taskfile.yml"
+            if [[ "$source" == "[folder]" ]]; then
+                local ftfile="$EZ_TASKS_DIR/$name/Taskfile.yml"
                 desc=$(get_task_prop "$ftfile" "default" "desc" 2>/dev/null || true)
-                flags=" ${MAGENTA}[skill]${NC}"
+                flags=" ${MAGENTA}[folder]${NC}"
             else
                 desc=$(get_task_prop "$taskfile" "$name" "desc")
             fi
@@ -272,10 +272,10 @@ cmd_list() {
             if [[ $shown -lt 3 ]]; then
                 local source="${group_sources["${prefix}_${name}"]}"
                 local desc="" flags=""
-                if [[ "$source" == "[skill]" ]]; then
-                    local ftfile="$EZ_SKILLS_DIR/$name/Taskfile.yml"
+                if [[ "$source" == "[folder]" ]]; then
+                    local ftfile="$EZ_TASKS_DIR/$name/Taskfile.yml"
                     desc=$(get_task_prop "$ftfile" "default" "desc" 2>/dev/null || true)
-                    flags=" ${MAGENTA}[skill]${NC}"
+                    flags=" ${MAGENTA}[folder]${NC}"
                 else
                     desc=$(get_task_prop "$taskfile" "$name" "desc")
                 fi
@@ -464,26 +464,26 @@ cmd_show() {
     local taskfile
     taskfile=$(find_taskfile ".") || die "未找到 Taskfile"
 
-    # 检查是否是 Skill
-    if is_skill "$task"; then
-        local skill_dir="$EZ_SKILLS_DIR/$task"
-        local ftfile="$skill_dir/Taskfile.yml"
-        echo -e "${BOLD}Skill: ${GREEN}$task${NC} ${MAGENTA}[skill]${NC}"
+    # 检查是否是文件夹任务
+    if is_folder_task "$task"; then
+        local task_dir="$EZ_TASKS_DIR/$task"
+        local ftfile="$task_dir/Taskfile.yml"
+        echo -e "${BOLD}Task: ${GREEN}$task${NC} ${MAGENTA}[folder]${NC}"
         echo ""
-        echo -e "${BOLD}Directory:${NC} $skill_dir/"
+        echo -e "${BOLD}Directory:${NC} $task_dir/"
         echo ""
 
-        # 显示 skill.yml 元数据 (如果存在)
-        if [[ -f "$skill_dir/skill.yml" ]]; then
-            echo -e "${BOLD}Metadata (skill.yml):${NC}"
-            local skill_desc skill_usage
-            skill_desc=$("$YQ" eval '.desc // ""' "$skill_dir/skill.yml" 2>/dev/null)
-            skill_usage=$("$YQ" eval '.usage // ""' "$skill_dir/skill.yml" 2>/dev/null)
-            [[ -n "$skill_desc" && "$skill_desc" != "null" ]] && echo "  desc: $skill_desc"
-            [[ -n "$skill_usage" && "$skill_usage" != "null" ]] && echo "  usage: $skill_usage"
+        # 显示 task.yml 元数据 (如果存在)
+        if [[ -f "$task_dir/task.yml" ]]; then
+            echo -e "${BOLD}Metadata (task.yml):${NC}"
+            local task_desc task_usage
+            task_desc=$("$YQ" eval '.desc // ""' "$task_dir/task.yml" 2>/dev/null)
+            task_usage=$("$YQ" eval '.usage // ""' "$task_dir/task.yml" 2>/dev/null)
+            [[ -n "$task_desc" && "$task_desc" != "null" ]] && echo "  desc: $task_desc"
+            [[ -n "$task_usage" && "$task_usage" != "null" ]] && echo "  usage: $task_usage"
 
             local tags
-            tags=$("$YQ" eval '.tags // [] | join(", ")' "$skill_dir/skill.yml" 2>/dev/null)
+            tags=$("$YQ" eval '.tags // [] | join(", ")' "$task_dir/task.yml" 2>/dev/null)
             [[ -n "$tags" && "$tags" != "null" ]] && echo "  tags: $tags"
             echo ""
         fi
@@ -500,7 +500,7 @@ cmd_show() {
 
         # 显示目录内容
         echo -e "${BOLD}Files:${NC}"
-        ls -1 "$skill_dir" | while read -r f; do
+        ls -1 "$task_dir" | while read -r f; do
             echo "  $f"
         done
         return
@@ -786,12 +786,12 @@ cmd_run() {
         return $?
     fi
 
-    # 检查是否是 Skill — 默认在 workspace 中执行
-    if is_skill "$task"; then
+    # 检查是否是文件夹任务 — 默认在 workspace 中执行
+    if is_folder_task "$task"; then
         if [[ "$no_workspace" == "true" ]]; then
-            _run_skill "$task" "$dry_run" "$enable_log" "${extra_vars[@]}"
+            _run_folder_task "$task" "$dry_run" "$enable_log" "${extra_vars[@]}"
         else
-            _run_skill_in_workspace "$task" "$dry_run" "$enable_log" "${extra_vars[@]}"
+            _run_folder_task_in_workspace "$task" "$dry_run" "$enable_log" "${extra_vars[@]}"
         fi
         return $?
     fi
@@ -920,18 +920,18 @@ cmd_run() {
 }
 
 # -----------------------------------------------------------------------------
-# 执行 Skill (直接在 skills/ 目录)
+# 执行文件夹任务 (直接在 tasks/ 目录)
 # -----------------------------------------------------------------------------
-_run_skill() {
+_run_folder_task() {
     local task="$1" dry_run="$2" enable_log="$3"
     shift 3
     local -a extra_vars=("$@")
 
-    local skill_dir="$EZ_SKILLS_DIR/$task"
-    local ftfile="$skill_dir/Taskfile.yml"
-    [[ -f "$ftfile" ]] || ftfile="$skill_dir/Taskfile.yaml"
+    local task_dir="$EZ_TASKS_DIR/$task"
+    local ftfile="$task_dir/Taskfile.yml"
+    [[ -f "$ftfile" ]] || ftfile="$task_dir/Taskfile.yaml"
 
-    local -a cmd=("$TASK" "-d" "$skill_dir" "default")
+    local -a cmd=("$TASK" "-d" "$task_dir" "default")
     for v in "${extra_vars[@]}"; do
         cmd+=("$v")
     done
@@ -941,8 +941,8 @@ _run_skill() {
         return 0
     fi
 
-    echo -e "${BOLD}Running:${NC} ${GREEN}$task${NC} ${MAGENTA}[skill]${NC}"
-    echo -e "  ${DIM}Dir: $skill_dir${NC}"
+    echo -e "${BOLD}Running:${NC} ${GREEN}$task${NC} ${MAGENTA}[folder]${NC}"
+    echo -e "  ${DIM}Dir: $task_dir${NC}"
     echo ""
 
     if [[ "$enable_log" == "true" ]]; then
@@ -964,25 +964,25 @@ _run_skill() {
 }
 
 # -----------------------------------------------------------------------------
-# 执行 Skill (默认在 .ez/skills/<name>/workspace/ 中)
+# 执行文件夹任务 (默认在 .ez/tasks/<name>/workspace/ 中)
 # -----------------------------------------------------------------------------
-_run_skill_in_workspace() {
+_run_folder_task_in_workspace() {
     local task="$1" dry_run="$2" enable_log="$3"
     shift 3
     local -a extra_vars=("$@")
 
-    local skill_dir="$EZ_SKILLS_DIR/$task"
-    local ftfile="$skill_dir/Taskfile.yml"
-    [[ -f "$ftfile" ]] || ftfile="$skill_dir/Taskfile.yaml"
+    local task_dir="$EZ_TASKS_DIR/$task"
+    local ftfile="$task_dir/Taskfile.yml"
+    [[ -f "$ftfile" ]] || ftfile="$task_dir/Taskfile.yaml"
 
-    # 创建 skill 默认 workspace
+    # 创建文件夹任务默认 workspace
     local ws_dir
     ws_dir=$(create_workspace "default" "$task")
 
-    # 复制 Skill 的 Taskfile 到 workspace (非根 Taskfile)
+    # 复制文件夹任务的 Taskfile 到 workspace (非根 Taskfile)
     cp "$ftfile" "$ws_dir/Taskfile.yml"
 
-    echo -e "${BOLD}Skill:${NC} ${GREEN}$task${NC} ${MAGENTA}[skill]${NC}"
+    echo -e "${BOLD}Task:${NC} ${GREEN}$task${NC} ${MAGENTA}[folder]${NC}"
     echo -e "  ${DIM}Workspace: $ws_dir${NC}"
     echo ""
 
@@ -2191,21 +2191,21 @@ cmd_plugin() {
 }
 
 # -----------------------------------------------------------------------------
-# 命令: new (创建 Skill)
+# 命令: new (创建文件夹任务)
 # -----------------------------------------------------------------------------
 cmd_new() {
     local name="${1:-}"
-    [[ -z "$name" ]] && die "用法: ez new <skill-name>"
+    [[ -z "$name" ]] && die "用法: ez new <task-name>"
 
-    local skill_dir="$EZ_SKILLS_DIR/$name"
-    if [[ -d "$skill_dir" ]]; then
-        die "Skill 已存在: $skill_dir"
+    local task_dir="$EZ_TASKS_DIR/$name"
+    if [[ -d "$task_dir" ]]; then
+        die "任务已存在: $task_dir"
     fi
 
-    mkdir -p "$skill_dir"
+    mkdir -p "$task_dir"
 
     # 创建 Taskfile.yml
-    cat > "$skill_dir/Taskfile.yml" << EOF
+    cat > "$task_dir/Taskfile.yml" << EOF
 version: '3'
 
 tasks:
@@ -2215,14 +2215,14 @@ tasks:
       - cmd: "echo 'TODO: implement $name'"
 EOF
 
-    # 创建 skill.yml 元数据
-    cat > "$skill_dir/skill.yml" << EOF
+    # 创建 task.yml 元数据
+    cat > "$task_dir/task.yml" << EOF
 name: $name
 version: "0.1"
-desc: "$name skill"
+desc: "$name task"
 
 usage: |
-  TODO: 描述此 Skill 的用途和用法
+  TODO: 描述此任务的用途和用法
 
 params: []
 
@@ -2231,9 +2231,9 @@ examples:
   - "ez $name"
 EOF
 
-    echo -e "${GREEN}✓ Skill created: $skill_dir/${NC}"
-    echo "  Taskfile: $skill_dir/Taskfile.yml"
-    echo "  Metadata: $skill_dir/skill.yml"
+    echo -e "${GREEN}✓ Task created: $task_dir/${NC}"
+    echo "  Taskfile: $task_dir/Taskfile.yml"
+    echo "  Metadata: $task_dir/task.yml"
 }
 
 # -----------------------------------------------------------------------------
@@ -2260,9 +2260,9 @@ cmd_check() {
             ((errors++))
         fi
 
-        # 检查 Skills
-        if [[ -d "$EZ_SKILLS_DIR" ]]; then
-            for dir in "$EZ_SKILLS_DIR"/*/; do
+        # 检查文件夹任务
+        if [[ -d "$EZ_TASKS_DIR" ]]; then
+            for dir in "$EZ_TASKS_DIR"/*/; do
                 [[ ! -d "$dir" ]] && continue
                 local tname
                 tname=$(basename "$dir")
@@ -2271,15 +2271,15 @@ cmd_check() {
                 [[ -f "$dir/Taskfile.yaml" ]] && tfile="$dir/Taskfile.yaml"
 
                 if [[ -z "$tfile" ]]; then
-                    echo -e "  ${RED}✗${NC} skills/$tname: missing Taskfile.yml"
+                    echo -e "  ${RED}✗${NC} tasks/$tname: missing Taskfile.yml"
                     ((errors++))
                     continue
                 fi
 
                 if "$YQ" eval '.' "$tfile" &>/dev/null; then
-                    echo -e "  ${GREEN}✓${NC} skills/$tname OK"
+                    echo -e "  ${GREEN}✓${NC} tasks/$tname OK"
                 else
-                    echo -e "  ${RED}✗${NC} skills/$tname: syntax error"
+                    echo -e "  ${RED}✗${NC} tasks/$tname: syntax error"
                     ((errors++))
                 fi
             done
@@ -2305,8 +2305,8 @@ cmd_check() {
         echo -e "${BOLD}Checking task: $target${NC}"
         echo ""
 
-        if is_skill "$target"; then
-            local tfile="$EZ_SKILLS_DIR/$target/Taskfile.yml"
+        if is_folder_task "$target"; then
+            local tfile="$EZ_TASKS_DIR/$target/Taskfile.yml"
             if "$YQ" eval '.' "$tfile" &>/dev/null; then
                 echo -e "  ${GREEN}✓${NC} Taskfile syntax OK"
             else
@@ -2595,25 +2595,25 @@ cmd_server_docker() {
         die "Docker 未安装"
     fi
 
-    if [[ ! -f "$EZ_ROOT/docker-compose.yml" ]]; then
-        die "docker-compose.yml 未找到"
+    if [[ ! -f "$EZ_ROOT/server/docker-compose.yml" ]]; then
+        die "server/docker-compose.yml 未找到"
     fi
 
     case "$action" in
         up)
             echo -e "${BOLD}Starting EZ Server (Docker)...${NC}"
-            docker-compose -f "$EZ_ROOT/docker-compose.yml" up -d
+            docker-compose -f "$EZ_ROOT/server/docker-compose.yml" up -d
             echo -e "${GREEN}✓ Server started at http://localhost:8080${NC}"
             ;;
         down)
-            docker-compose -f "$EZ_ROOT/docker-compose.yml" down
+            docker-compose -f "$EZ_ROOT/server/docker-compose.yml" down
             echo -e "${GREEN}✓ Server stopped${NC}"
             ;;
         logs)
-            docker-compose -f "$EZ_ROOT/docker-compose.yml" logs -f
+            docker-compose -f "$EZ_ROOT/server/docker-compose.yml" logs -f
             ;;
         build)
-            docker-compose -f "$EZ_ROOT/docker-compose.yml" build
+            docker-compose -f "$EZ_ROOT/server/docker-compose.yml" build
             ;;
         *)
             die "用法: ez server docker [up|down|logs|build]"
@@ -2696,23 +2696,23 @@ cmd_client() {
 }
 
 # -----------------------------------------------------------------------------
-# 命令: skill (Skill 管理)
+# 命令: export/import (文件夹任务管理)
 # -----------------------------------------------------------------------------
-cmd_skill_list() {
-    if [[ ! -d "$EZ_SKILLS_DIR" ]] || [[ -z "$(ls -A "$EZ_SKILLS_DIR" 2>/dev/null)" ]]; then
-        echo "  (无 Skill)"
-        echo -e "  ${DIM}提示: ez new <name> 创建新 Skill${NC}"
+cmd_folder_list() {
+    if [[ ! -d "$EZ_TASKS_DIR" ]] || [[ -z "$(ls -A "$EZ_TASKS_DIR" 2>/dev/null)" ]]; then
+        echo "  (无文件夹任务)"
+        echo -e "  ${DIM}提示: ez new <name> 创建新文件夹任务${NC}"
         return
     fi
 
-    echo -e "${BOLD}Skills:${NC}"
+    echo -e "${BOLD}Folder Tasks:${NC}"
     echo ""
-    for dir in "$EZ_SKILLS_DIR"/*/; do
+    for dir in "$EZ_TASKS_DIR"/*/; do
         [[ ! -d "$dir" ]] && continue
         local name desc=""
         name=$(basename "$dir")
-        if [[ -f "$dir/skill.yml" ]]; then
-            desc=$("$YQ" eval '.desc // ""' "$dir/skill.yml" 2>/dev/null)
+        if [[ -f "$dir/task.yml" ]]; then
+            desc=$("$YQ" eval '.desc // ""' "$dir/task.yml" 2>/dev/null)
         elif [[ -f "$dir/Taskfile.yml" ]]; then
             desc=$(get_task_prop "$dir/Taskfile.yml" "default" "desc" 2>/dev/null || true)
         fi
@@ -2720,47 +2720,47 @@ cmd_skill_list() {
     done
 }
 
-cmd_skill_show() {
+cmd_folder_show() {
     local name="${1:-}"
-    [[ -z "$name" ]] && die "用法: ez skill show <name>"
+    [[ -z "$name" ]] && die "用法: ez export <name>"
     cmd_show "$name"
 }
 
-cmd_skill_export() {
+cmd_export() {
     local name="${1:-}"
-    [[ -z "$name" ]] && die "用法: ez skill export <name>"
+    [[ -z "$name" ]] && die "用法: ez export <name>"
 
-    local skill_dir="$EZ_SKILLS_DIR/$name"
-    [[ -d "$skill_dir" ]] || die "Skill 未找到: $name"
+    local task_dir="$EZ_TASKS_DIR/$name"
+    [[ -d "$task_dir" ]] || die "任务未找到: $name"
 
     local output="${name}.tar.gz"
-    tar -czf "$output" -C "$EZ_SKILLS_DIR" "$name"
+    tar -czf "$output" -C "$EZ_TASKS_DIR" "$name"
     echo -e "${GREEN}✓ Exported: $output${NC}"
 }
 
-cmd_skill_import() {
+cmd_import() {
     local path="${1:-}"
-    [[ -z "$path" ]] && die "用法: ez skill import <path.tar.gz>"
+    [[ -z "$path" ]] && die "用法: ez import <path.tar.gz>"
     [[ -f "$path" ]] || die "文件不存在: $path"
 
-    mkdir -p "$EZ_SKILLS_DIR"
-    tar -xzf "$path" -C "$EZ_SKILLS_DIR"
+    mkdir -p "$EZ_TASKS_DIR"
+    tar -xzf "$path" -C "$EZ_TASKS_DIR"
 
     local imported
     imported=$(tar -tzf "$path" | head -1 | cut -d/ -f1)
-    echo -e "${GREEN}✓ Imported: skills/$imported/${NC}"
+    echo -e "${GREEN}✓ Imported: tasks/$imported/${NC}"
 }
 
-cmd_skill() {
+cmd_folder_manage() {
     local subcmd="${1:-list}"
     shift || true
 
     case "$subcmd" in
-        list|ls)    cmd_skill_list "$@" ;;
-        show)       cmd_skill_show "$@" ;;
-        export)     cmd_skill_export "$@" ;;
-        import)     cmd_skill_import "$@" ;;
-        *)          die "未知 skill 子命令: $subcmd，可用: list, show, export, import" ;;
+        list|ls)    cmd_folder_list "$@" ;;
+        show)       cmd_folder_show "$@" ;;
+        export)     cmd_export "$@" ;;
+        import)     cmd_import "$@" ;;
+        *)          die "未知子命令: $subcmd，可用: list, show, export, import" ;;
     esac
 }
 
@@ -2780,18 +2780,18 @@ cmd_clean() {
             echo -e "${GREEN}✓ Cleaned: .ez/ (all runtime data)${NC}"
             ;;
         --logs)
-            rm -rf "$EZ_DIR"/skills/*/logs "$EZ_DIR"/plans/*/logs "$EZ_LOG_DIR"
+            rm -rf "$EZ_DIR"/tasks/*/logs "$EZ_DIR"/plans/*/logs "$EZ_LOG_DIR"
             echo -e "${GREEN}✓ Cleaned: all logs${NC}"
             ;;
         --workspace)
-            rm -rf "$EZ_DIR"/skills/*/workspace "$EZ_WORKSPACE_DIR"
+            rm -rf "$EZ_DIR"/tasks/*/workspace "$EZ_WORKSPACE_DIR"
             echo -e "${GREEN}✓ Cleaned: all workspaces${NC}"
             ;;
         *)
-            # 尝试清理 skill 或 plan
-            if [[ -d "$EZ_DIR/skills/$target" ]]; then
-                rm -rf "$EZ_DIR/skills/$target"
-                echo -e "${GREEN}✓ Cleaned: .ez/skills/$target/${NC}"
+            # 尝试清理 task 或 plan
+            if [[ -d "$EZ_DIR/tasks/$target" ]]; then
+                rm -rf "$EZ_DIR/tasks/$target"
+                echo -e "${GREEN}✓ Cleaned: .ez/tasks/$target/${NC}"
             elif [[ -d "$EZ_DIR/plans/$target" ]]; then
                 rm -rf "$EZ_DIR/plans/$target"
                 echo -e "${GREEN}✓ Cleaned: .ez/plans/$target/${NC}"
@@ -2819,7 +2819,8 @@ main() {
         new)          cmd_new "$@" ;;
         check)        cmd_check "$@" ;;
         clean)        cmd_clean "$@" ;;
-        skill)        cmd_skill "$@" ;;
+        export)       cmd_export "$@" ;;
+        import)       cmd_import "$@" ;;
         completion)   cmd_completion "$@" ;;
         plan)         cmd_plan "$@" ;;
         template|tpl) cmd_template "$@" ;;

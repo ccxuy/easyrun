@@ -20,8 +20,8 @@ tasks:
       - cmd: test -f ./server/templates/jobs.html
       - cmd: test -f ./server/static/css/style.css
       - cmd: test -f ./client/agent.py
-      - cmd: test -f ./Dockerfile.server
-      - cmd: test -f ./docker-compose.yml
+      - cmd: test -f ./server/Dockerfile
+      - cmd: test -f ./server/docker-compose.yml
       - cmd: echo "✓ server files OK"
 
   help-commands:

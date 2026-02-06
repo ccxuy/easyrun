@@ -12,8 +12,8 @@ tasks:
       - task: show
       - task: run
       - task: implicit-run
-      - task: new-and-skill
-      - task: skill-cmds
+      - task: new-and-folder
+      - task: export-import
       - task: clean-cmd
       - task: check
       - task: completion
@@ -25,7 +25,7 @@ tasks:
       - cmd: ./ez help | grep -q "go-task"
       - cmd: ./ez help | grep -q "implicit run"
       - cmd: ./ez help | grep -q "Tab 补全"
-      - cmd: ./ez help | grep -q "Skill"
+      - cmd: ./ez help | grep -q "文件夹任务"
       - cmd: echo "✓ ez help OK"
 
   version:
@@ -81,52 +81,52 @@ tasks:
       - cmd: ./ez nonexistent-xyz 2>&1 | grep -q "未知命令或任务"
       - cmd: echo "✓ implicit run OK"
 
-  new-and-skill:
-    desc: "测试 ez new 和 Skill"
+  new-and-folder:
+    desc: "测试 ez new"
     cmds:
-      # 创建新 Skill
-      - cmd: ./ez new test-tmp-skill
-      - cmd: test -f skills/test-tmp-skill/Taskfile.yml
-      - cmd: test -f skills/test-tmp-skill/skill.yml
-      - cmd: ./ez list -f | grep -q "test-tmp-skill"
-      - cmd: ./ez show test-tmp-skill | grep -q "[skill]"
-      - cmd: ./ez test-tmp-skill --no-workspace | grep -q "TODO"
+      # 创建新文件夹任务
+      - cmd: ./ez new test-tmp-task
+      - cmd: test -f tasks/test-tmp-task/Taskfile.yml
+      - cmd: test -f tasks/test-tmp-task/task.yml
+      - cmd: ./ez list -f | grep -q "test-tmp-task"
+      - cmd: ./ez show test-tmp-task | grep -q "[folder]"
+      - cmd: ./ez test-tmp-task --no-workspace | grep -q "TODO"
       # 清理
-      - cmd: rm -rf skills/test-tmp-skill
-      - cmd: echo "✓ new and skill OK"
+      - cmd: rm -rf tasks/test-tmp-task
+      - cmd: echo "✓ new and folder OK"
 
-  skill-cmds:
-    desc: "测试 ez skill 子命令"
+  export-import:
+    desc: "测试 ez export/import"
     cmds:
-      # 先创建一个测试 skill
-      - cmd: ./ez new test-export-skill
-      # skill list
-      - cmd: ./ez skill list | grep -q "test-export-skill"
-      # skill export
-      - cmd: ./ez skill export test-export-skill
-      - cmd: test -f test-export-skill.tar.gz
+      # 先创建一个测试任务
+      - cmd: ./ez new test-export-task
+      # 验证在 list 中可见
+      - cmd: ./ez list -f | grep -q "test-export-task"
+      # export
+      - cmd: ./ez export test-export-task
+      - cmd: test -f test-export-task.tar.gz
       # 删除后 import
-      - cmd: rm -rf skills/test-export-skill
-      - cmd: ./ez skill import test-export-skill.tar.gz
-      - cmd: test -f skills/test-export-skill/Taskfile.yml
-      - cmd: test -f skills/test-export-skill/skill.yml
+      - cmd: rm -rf tasks/test-export-task
+      - cmd: ./ez import test-export-task.tar.gz
+      - cmd: test -f tasks/test-export-task/Taskfile.yml
+      - cmd: test -f tasks/test-export-task/task.yml
       # 清理
-      - cmd: rm -rf skills/test-export-skill test-export-skill.tar.gz
-      - cmd: echo "✓ skill commands OK"
+      - cmd: rm -rf tasks/test-export-task test-export-task.tar.gz
+      - cmd: echo "✓ export/import commands OK"
 
   clean-cmd:
     desc: "测试 ez clean"
     cmds:
-      # 创建测试 skill 并运行以生成运行时数据
-      - cmd: ./ez new test-clean-skill
-      - cmd: ./ez test-clean-skill --no-workspace --log 2>/dev/null || true
+      # 创建测试任务并运行以生成运行时数据
+      - cmd: ./ez new test-clean-task
+      - cmd: ./ez test-clean-task --no-workspace --log 2>/dev/null || true
       # 验证运行时目录存在
-      - cmd: test -d .ez/skills/test-clean-skill/logs || true
+      - cmd: test -d .ez/tasks/test-clean-task/logs || true
       # clean 清理运行时
-      - cmd: ./ez clean test-clean-skill | grep -q "Cleaned"
-      - cmd: test ! -d .ez/skills/test-clean-skill
+      - cmd: ./ez clean test-clean-task | grep -q "Cleaned"
+      - cmd: test ! -d .ez/tasks/test-clean-task
       # 清理
-      - cmd: rm -rf skills/test-clean-skill
+      - cmd: rm -rf tasks/test-clean-task
       - cmd: echo "✓ ez clean OK"
 
   check:
