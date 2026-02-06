@@ -1,0 +1,70 @@
+# Workspace 隔离执行测试 (v1.4)
+version: '3'
+
+tasks:
+  all:
+    desc: "运行所有 Workspace 测试"
+    cmds:
+      - task: workspace-auto
+      - task: workspace-named
+      - task: workspace-dry-run
+      - task: skill-default-workspace
+      - task: ez-dir-structure
+      - task: cleanup
+      - cmd: echo "✓ 17-workspace 全部通过"
+
+  workspace-auto:
+    desc: "测试 --workspace=auto 自动命名"
+    cmds:
+      - cmd: ./ez hello --workspace=auto | grep -q "Workspace:"
+      - cmd: test -d .ez/workspace
+      - cmd: "ls .ez/workspace/ | head -1 | grep -qE '^[0-9]{8}-[0-9]{6}-'"
+      - cmd: echo "✓ workspace auto OK"
+
+  workspace-named:
+    desc: "测试 --workspace=mytest 指定名称"
+    cmds:
+      - cmd: ./ez hello --workspace=mytest | grep -q "Workspace:"
+      - cmd: test -d .ez/workspace/mytest
+      - cmd: test -L .ez/workspace/mytest/src
+      - cmd: test -f .ez/workspace/mytest/Taskfile.yml
+      - cmd: echo "✓ workspace named OK"
+
+  workspace-dry-run:
+    desc: "测试 workspace + dry-run"
+    cmds:
+      - cmd: ./ez hello --workspace=drytest --dry-run | grep -q "Dry run"
+      - cmd: test -d .ez/workspace/drytest
+      - cmd: echo "✓ workspace dry-run OK"
+
+  skill-default-workspace:
+    desc: "测试 Skill 默认 workspace 执行"
+    cmds:
+      # 创建测试 Skill
+      - cmd: ./ez new ws-test-skill
+      # 默认执行（在 workspace 中）
+      - cmd: ./ez ws-test-skill | grep -q "Skill:"
+      - cmd: test -d .ez/skills/ws-test-skill/workspace
+      # --no-workspace 直接执行
+      - cmd: ./ez ws-test-skill --no-workspace | grep -q "[skill]"
+      # 清理
+      - cmd: rm -rf skills/ws-test-skill .ez/skills/ws-test-skill
+      - cmd: echo "✓ skill default workspace OK"
+
+  ez-dir-structure:
+    desc: "测试 .ez/ 按粒度目录结构"
+    cmds:
+      # .ez/ 根目录应存在
+      - cmd: test -d .ez
+      # workspace 子目录应存在（前面的测试已创建）
+      - cmd: test -d .ez/workspace
+      - cmd: echo "✓ .ez/ dir structure OK"
+
+  cleanup:
+    desc: "清理测试工作区"
+    cmds:
+      - cmd: rm -rf .ez/workspace/mytest
+      - cmd: rm -rf .ez/workspace/drytest
+      # 清理 auto 工作区（匹配日期模式）
+      - cmd: 'find .ez/workspace/ -maxdepth 1 -type d -name "20*" -exec rm -rf {} + 2>/dev/null || true'
+      - cmd: echo "✓ cleanup OK"

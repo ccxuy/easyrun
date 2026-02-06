@@ -1,0 +1,72 @@
+# Plan 编译系统测试 (v1.2 → v1.4)
+version: '3'
+
+tasks:
+  all:
+    desc: "运行所有 Plan 编译测试"
+    cmds:
+      - task: plan-new
+      - task: plan-add
+      - task: plan-build
+      - task: plan-check
+      - task: plan-show-v2
+      - task: plan-run-v2
+      - task: cleanup
+      - cmd: echo "✓ 16-plan-compile 全部通过"
+
+  plan-new:
+    desc: "测试 ez plan new"
+    cmds:
+      - cmd: ./ez plan new test-compile --desc "编译测试"
+      - cmd: test -f plans/test-compile.yml
+      - cmd: ./dep/yq eval '.name' plans/test-compile.yml | grep -q "test-compile"
+      - cmd: echo "✓ plan new OK"
+
+  plan-add:
+    desc: "测试 ez plan add"
+    cmds:
+      - cmd: ./ez plan add test-compile kernel-config --name config
+      - cmd: ./ez plan add test-compile kernel-build --name build --needs config
+      - cmd: ./dep/yq eval '.steps | length' plans/test-compile.yml | grep -q "2"
+      - cmd: ./dep/yq eval '.steps[1].needs[0]' plans/test-compile.yml | grep -q "config"
+      - cmd: echo "✓ plan add OK"
+
+  plan-build:
+    desc: "测试 ez plan build (v1.4: 输出到 .ez/plans/<name>/build/)"
+    cmds:
+      - cmd: ./ez plan build test-compile
+      - cmd: test -f .ez/plans/test-compile/build/Taskfile.yml
+      - cmd: ./dep/yq eval '.tasks.default.cmds | length' .ez/plans/test-compile/build/Taskfile.yml | grep -q "2"
+      - cmd: ./dep/yq eval '.tasks."step-build".deps[0]' .ez/plans/test-compile/build/Taskfile.yml | grep -q "step-config"
+      - cmd: echo "✓ plan build OK"
+
+  plan-check:
+    desc: "测试 ez plan check"
+    cmds:
+      - cmd: ./ez plan check test-compile | grep -qi "validation passed"
+      - cmd: ./ez plan check kernel-ci-v2 | grep -qi "validation passed"
+      - cmd: ./ez plan check kernel-ci-v2 | grep -q "vmlinux"
+      - cmd: echo "✓ plan check OK"
+
+  plan-show-v2:
+    desc: "测试 ez plan show (v1.2 格式)"
+    cmds:
+      - cmd: ./ez plan show kernel-ci-v2 | grep -q "[v1.2]"
+      - cmd: ./ez plan show kernel-ci-v2 | grep -q "needs"
+      - cmd: echo "✓ plan show v2 OK"
+
+  plan-run-v2:
+    desc: "测试 ez plan run (v1.2 编译型)"
+    cmds:
+      - cmd: ./ez plan run test-compile --dry-run | grep -q "Compiling plan"
+      - cmd: ./ez plan run test-compile --dry-run | grep -q "Generated Taskfile"
+      # 隐式运行
+      - cmd: ./ez plan test-compile --dry-run | grep -q "Compiling plan"
+      - cmd: echo "✓ plan run v2 OK"
+
+  cleanup:
+    desc: "清理测试文件"
+    cmds:
+      - cmd: rm -f plans/test-compile.yml
+      - cmd: rm -rf .ez/plans/test-compile
+      - cmd: echo "✓ cleanup OK"
