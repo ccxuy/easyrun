@@ -4,6 +4,7 @@ EZ Server - 分布式任务执行服务器
 """
 
 import os
+import re
 import json
 import time
 import uuid
@@ -23,6 +24,14 @@ DB_PATH = os.environ.get('EZ_DB_PATH', os.path.join(EZ_ROOT, '.ez-server', 'ez.d
 SERVER_TOKEN = os.environ.get('EZ_SERVER_TOKEN', '')
 HTTP_PORT = int(os.environ.get('EZ_HTTP_PORT', 8080))
 API_PORT = int(os.environ.get('EZ_API_PORT', 9090))
+YQ = os.path.join(EZ_ROOT, 'dep', 'yq')
+if not os.path.isfile(YQ):
+    # Docker 环境: yq 安装在系统路径
+    YQ = 'yq'
+
+def strip_ansi(text):
+    """清除 ANSI 转义序列"""
+    return re.sub(r'\033\[[0-9;]*m', '', text)
 
 # Flask 应用
 app = Flask(__name__,
@@ -607,75 +616,257 @@ def api_executions():
 
 @app.route('/api/v1/tasks/tree', methods=['GET'])
 def api_task_tree():
-    """返回树形任务结构"""
+    """返回树形任务结构 (直接解析 YAML，避免 ANSI 问题)"""
     try:
-        result = subprocess.run(
-            [os.path.join(EZ_ROOT, 'ez'), 'list', '--all', '--flat'],
-            capture_output=True, text=True, timeout=10
-        )
-        # 解析平面列表
         tasks_flat = []
-        for line in result.stdout.split('\n'):
-            line = line.strip()
-            if not line or line.startswith('Tasks:'):
-                continue
-            parts = line.split(maxsplit=1)
-            if parts:
-                name = parts[0]
-                rest = parts[1] if len(parts) > 1 else ''
-                desc = rest.split('[')[0].strip() if '[' in rest else rest.strip()
-                task_type = 'dir' if '[dir]' in rest else 'inline'
-                if '[tool]' in rest:
-                    task_type = 'tool'
-                tasks_flat.append({'name': name, 'desc': desc, 'type': task_type})
 
-        # 按命名空间分组 (用 : 分隔)
-        tree = []
-        groups = {}
-        for t in tasks_flat:
-            if ':' in t['name']:
-                ns = t['name'].split(':')[0]
-                if ns not in groups:
-                    groups[ns] = {'name': ns, 'type': 'namespace', 'desc': '', 'children': []}
-                groups[ns]['children'].append(t)
-            else:
-                tree.append(t)
+        # 1. 读 Taskfile.yml 获取行内任务
+        taskfile = os.path.join(EZ_ROOT, 'Taskfile.yml')
+        if os.path.isfile(taskfile):
+            # 获取所有 task 名称
+            result = subprocess.run(
+                [YQ, 'eval', '.tasks | keys | .[]', taskfile],
+                capture_output=True, text=True, timeout=10
+            )
+            for name in result.stdout.strip().split('\n'):
+                name = name.strip()
+                if not name:
+                    continue
+                # 获取 desc
+                desc_result = subprocess.run(
+                    [YQ, 'eval', f'.tasks."{name}".desc // ""', taskfile],
+                    capture_output=True, text=True, timeout=5
+                )
+                desc = desc_result.stdout.strip().strip('"')
+                # 检查是否有 ez-params
+                params_result = subprocess.run(
+                    [YQ, 'eval', f'.tasks."{name}".ez-params | length', taskfile],
+                    capture_output=True, text=True, timeout=5
+                )
+                params_count = params_result.stdout.strip()
+                has_params = params_count not in ('0', 'null', '')
+                tasks_flat.append({
+                    'name': name, 'desc': desc, 'type': 'inline',
+                    'has_params': has_params
+                })
 
-        # 插入 namespace groups
-        for ns, group in sorted(groups.items()):
-            group['desc'] = f'{len(group["children"])} 个子任务'
-            tree.append(group)
+            # 处理 includes 命名空间
+            inc_result = subprocess.run(
+                [YQ, 'eval', '.includes | keys | .[]', taskfile],
+                capture_output=True, text=True, timeout=5
+            )
+            for ns in inc_result.stdout.strip().split('\n'):
+                ns = ns.strip()
+                if not ns:
+                    continue
+                # 获取 include 的 taskfile 路径
+                inc_path_result = subprocess.run(
+                    [YQ, 'eval', f'.includes."{ns}".taskfile // .includes."{ns}"', taskfile],
+                    capture_output=True, text=True, timeout=5
+                )
+                inc_path = inc_path_result.stdout.strip().strip('"')
+                inc_file = os.path.join(EZ_ROOT, inc_path) if inc_path else None
+                children = []
+                if inc_file and os.path.isfile(inc_file):
+                    child_result = subprocess.run(
+                        [YQ, 'eval', '.tasks | keys | .[]', inc_file],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    for child_name in child_result.stdout.strip().split('\n'):
+                        child_name = child_name.strip()
+                        if not child_name:
+                            continue
+                        child_desc_result = subprocess.run(
+                            [YQ, 'eval', f'.tasks."{child_name}".desc // ""', inc_file],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        child_desc = child_desc_result.stdout.strip().strip('"')
+                        children.append({
+                            'name': f'{ns}:{child_name}', 'desc': child_desc,
+                            'type': 'inline', 'has_params': False
+                        })
+                    # 也扫描 includes 内的子 includes
+                    sub_inc_result = subprocess.run(
+                        [YQ, 'eval', '.includes | keys | .[]', inc_file],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    for sub_ns in sub_inc_result.stdout.strip().split('\n'):
+                        sub_ns = sub_ns.strip()
+                        if not sub_ns:
+                            continue
+                        sub_path_result = subprocess.run(
+                            [YQ, 'eval', f'.includes."{sub_ns}".taskfile // .includes."{sub_ns}"', inc_file],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        sub_path = sub_path_result.stdout.strip().strip('"')
+                        # 相对于 inc_file 的目录
+                        sub_file = os.path.join(os.path.dirname(inc_file), sub_path) if sub_path else None
+                        if sub_file and os.path.isfile(sub_file):
+                            sub_child_result = subprocess.run(
+                                [YQ, 'eval', '.tasks | keys | .[]', sub_file],
+                                capture_output=True, text=True, timeout=5
+                            )
+                            for sc_name in sub_child_result.stdout.strip().split('\n'):
+                                sc_name = sc_name.strip()
+                                if not sc_name:
+                                    continue
+                                sc_desc_result = subprocess.run(
+                                    [YQ, 'eval', f'.tasks."{sc_name}".desc // ""', sub_file],
+                                    capture_output=True, text=True, timeout=5
+                                )
+                                sc_desc = sc_desc_result.stdout.strip().strip('"')
+                                children.append({
+                                    'name': f'{ns}:{sc_name}', 'desc': sc_desc,
+                                    'type': 'inline', 'has_params': False
+                                })
 
-        # 扫描 tasks/ 目录获取参数信息
+                if children:
+                    tasks_flat.append({
+                        'name': ns, 'type': 'namespace',
+                        'desc': f'{len(children)} 个子任务',
+                        'children': children
+                    })
+
+        # 2. 扫描 tasks/ 获取目录任务
         tasks_dir = os.path.join(EZ_ROOT, 'tasks')
         if os.path.isdir(tasks_dir):
-            for entry in os.listdir(tasks_dir):
+            for entry in sorted(os.listdir(tasks_dir)):
                 entry_path = os.path.join(tasks_dir, entry)
-                if os.path.isdir(entry_path) and os.path.isfile(os.path.join(entry_path, 'Taskfile.yml')):
-                    # 检查是否已在列表中
+                tf = os.path.join(entry_path, 'Taskfile.yml')
+                if os.path.isdir(entry_path) and os.path.isfile(tf):
+                    desc = ''
+                    has_params = False
+                    # 读 task.yml 元数据
+                    meta = os.path.join(entry_path, 'task.yml')
+                    if os.path.isfile(meta):
+                        desc_result = subprocess.run(
+                            [YQ, 'eval', '.desc // ""', meta],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        desc = desc_result.stdout.strip().strip('"')
+                        params_result = subprocess.run(
+                            [YQ, 'eval', '.params | length', meta],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        pc = params_result.stdout.strip()
+                        has_params = pc not in ('0', 'null', '')
+                    # 已在行内列表中则更新
                     found = False
-                    for t in tree:
-                        if t.get('name') == entry:
+                    for t in tasks_flat:
+                        if t.get('name') == entry and t.get('type') != 'namespace':
+                            t['type'] = 'dir'
                             t['path'] = f'tasks/{entry}/'
+                            if desc:
+                                t['desc'] = desc
+                            if has_params:
+                                t['has_params'] = True
                             found = True
                             break
                     if not found:
-                        tree.append({'name': entry, 'type': 'dir', 'desc': '', 'path': f'tasks/{entry}/'})
+                        tasks_flat.append({
+                            'name': entry, 'desc': desc, 'type': 'dir',
+                            'has_params': has_params, 'path': f'tasks/{entry}/'
+                        })
 
-        return jsonify({'tree': tree})
+        # 3. 扫描 lib/tools/*.yml 获取工具任务
+        tools_dir = os.path.join(EZ_ROOT, 'lib', 'tools')
+        if os.path.isdir(tools_dir):
+            for f in sorted(os.listdir(tools_dir)):
+                if f.endswith('.yml'):
+                    tool_path = os.path.join(tools_dir, f)
+                    name_result = subprocess.run(
+                        [YQ, 'eval', '.name // ""', tool_path],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    tool_name = name_result.stdout.strip().strip('"')
+                    desc_result = subprocess.run(
+                        [YQ, 'eval', '.desc // ""', tool_path],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    tool_desc = desc_result.stdout.strip().strip('"')
+                    if tool_name:
+                        tasks_flat.append({
+                            'name': tool_name, 'desc': tool_desc, 'type': 'tool',
+                            'has_params': False
+                        })
+
+        return jsonify({'tree': tasks_flat})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/v1/tasks/<task_name>/params', methods=['GET'])
 def api_task_params(task_name):
-    """获取任务参数定义"""
+    """获取任务参数定义 (结构化 JSON)"""
     try:
-        result = subprocess.run(
-            [os.path.join(EZ_ROOT, 'ez'), 'show', task_name],
-            capture_output=True, text=True, timeout=10
-        )
-        return jsonify({'name': task_name, 'details': result.stdout, 'exit_code': result.returncode})
+        taskfile = os.path.join(EZ_ROOT, 'Taskfile.yml')
+        params = []
+        desc = ''
+
+        # 目录任务: 读 task.yml
+        task_meta = os.path.join(EZ_ROOT, 'tasks', task_name, 'task.yml')
+        if os.path.isfile(task_meta):
+            desc_result = subprocess.run(
+                [YQ, 'eval', '.desc // ""', task_meta],
+                capture_output=True, text=True, timeout=5
+            )
+            desc = desc_result.stdout.strip().strip('"')
+            params_result = subprocess.run(
+                [YQ, 'eval', '-o=json', '.params // []', task_meta],
+                capture_output=True, text=True, timeout=5
+            )
+            if params_result.stdout.strip():
+                try:
+                    params = json.loads(params_result.stdout)
+                except json.JSONDecodeError:
+                    pass
+
+        # 行内任务: 读 Taskfile.yml 的 ez-params
+        if not params and os.path.isfile(taskfile):
+            # 处理带命名空间的任务名 (如 selftest:xxx → 查对应 include 文件)
+            actual_task = task_name
+            actual_file = taskfile
+            if ':' in task_name:
+                ns, sub = task_name.split(':', 1)
+                inc_path_result = subprocess.run(
+                    [YQ, 'eval', f'.includes."{ns}".taskfile // .includes."{ns}" // ""', taskfile],
+                    capture_output=True, text=True, timeout=5
+                )
+                inc_path = inc_path_result.stdout.strip().strip('"')
+                if inc_path:
+                    actual_file = os.path.join(EZ_ROOT, inc_path)
+                actual_task = sub
+
+            if os.path.isfile(actual_file):
+                desc_result = subprocess.run(
+                    [YQ, 'eval', f'.tasks."{actual_task}".desc // ""', actual_file],
+                    capture_output=True, text=True, timeout=5
+                )
+                desc = desc_result.stdout.strip().strip('"')
+                params_result = subprocess.run(
+                    [YQ, 'eval', '-o=json', f'.tasks."{actual_task}".ez-params // []', actual_file],
+                    capture_output=True, text=True, timeout=5
+                )
+                if params_result.stdout.strip():
+                    try:
+                        params = json.loads(params_result.stdout)
+                    except json.JSONDecodeError:
+                        pass
+
+        # 工具任务: 读 lib/tools/<name>.yml
+        tool_file = os.path.join(EZ_ROOT, 'lib', 'tools', f'{task_name}.yml')
+        if not params and os.path.isfile(tool_file):
+            desc_result = subprocess.run(
+                [YQ, 'eval', '.desc // ""', tool_file],
+                capture_output=True, text=True, timeout=5
+            )
+            desc = desc_result.stdout.strip().strip('"')
+
+        return jsonify({
+            'name': task_name,
+            'desc': desc,
+            'params': params
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

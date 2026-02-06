@@ -23,7 +23,7 @@
     <main class="container">
         <div class="page-header">
             <h1>任务浏览器</h1>
-            <p>浏览和管理 Taskfile 中定义的任务</p>
+            <p>浏览和管理所有任务 (行内 / 目录 / 工具)</p>
         </div>
 
         <div class="tasks-layout">
@@ -44,22 +44,6 @@
                 <h2>任务详情</h2>
                 <div id="task-detail">
                     <div class="empty">点击左侧任务查看详情</div>
-                </div>
-                <div id="task-run-form" style="display:none; margin-top:1.2rem; border-top:1px solid var(--border); padding-top:1rem;">
-                    <h2 style="margin-bottom:0.8rem;">执行任务</h2>
-                    <form id="run-form">
-                        <div class="form-group">
-                            <label>节点</label>
-                            <select id="node-select">
-                                <option value="">本地执行</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>参数 (JSON)</label>
-                            <textarea id="vars-input" placeholder='{"KEY": "value"}'></textarea>
-                        </div>
-                        <button type="submit" class="btn btn-primary btn-block">执行</button>
-                    </form>
                 </div>
             </div>
         </div>
@@ -88,25 +72,28 @@
         }
 
         function onCheckChange(taskName, checked) {
-            if (checked) {
-                checkedTasks.add(taskName);
-            } else {
-                checkedTasks.delete(taskName);
-            }
+            if (checked) checkedTasks.add(taskName);
+            else checkedTasks.delete(taskName);
             updateSelectedCount();
         }
 
-        function renderTaskItem(task) {
-            var badges = '';
+        function renderBadges(task) {
+            var html = '';
             if (task.type === 'dir') {
-                badges = '<span class="badge badge-dir">目录</span>';
+                html += '<span class="badge badge-dir">目录</span>';
             } else if (task.type === 'tool') {
-                badges = '<span class="badge badge-tool">工具</span>';
+                html += '<span class="badge badge-tool">工具</span>';
             }
+            if (task.has_params) {
+                html += '<span class="badge badge-params">参数</span>';
+            }
+            return html;
+        }
 
+        function renderTaskItem(task) {
             return '<div class="task-item" onclick="showTaskDetail(\'' + escapeHtml(task.name) + '\')">' +
                 '<span class="task-name">' + escapeHtml(task.name) + '</span>' +
-                badges +
+                renderBadges(task) +
                 '<span class="task-desc">' + escapeHtml(task.desc) + '</span>' +
                 '</div>';
         }
@@ -121,14 +108,10 @@
             html += '<div class="task-children">';
             if (group.children && group.children.length > 0) {
                 group.children.forEach(function(child) {
-                    var childBadges = '';
-                    if (child.type === 'dir') {
-                        childBadges = '<span class="badge badge-dir">目录</span>';
-                    }
                     html += '<div class="task-item" onclick="showTaskDetail(\'' + escapeHtml(child.name) + '\')">' +
                         '<input type="checkbox" class="task-check" onclick="event.stopPropagation(); onCheckChange(\'' + escapeHtml(child.name) + '\', this.checked)">' +
                         '<span class="task-name">' + escapeHtml(child.name) + '</span>' +
-                        childBadges +
+                        renderBadges(child) +
                         '<span class="task-desc">' + escapeHtml(child.desc) + '</span>' +
                         '</div>';
                 });
@@ -144,9 +127,7 @@
                 cb.checked = checkbox.checked;
                 var taskItem = cb.closest('.task-item');
                 var nameEl = taskItem.querySelector('.task-name');
-                if (nameEl) {
-                    onCheckChange(nameEl.textContent, checkbox.checked);
-                }
+                if (nameEl) onCheckChange(nameEl.textContent, checkbox.checked);
             });
         }
 
@@ -176,18 +157,31 @@
             }
         }
 
-        async function loadNodes() {
-            try {
-                var res = await fetch('/api/v1/nodes');
-                var data = await res.json();
-                var select = document.getElementById('node-select');
-                select.innerHTML = '<option value="">本地执行</option>' +
-                    data.nodes.map(function(n) {
-                        return '<option value="' + escapeHtml(n.id) + '">' + escapeHtml(n.name) + '</option>';
-                    }).join('');
-            } catch (e) {
-                console.error('加载节点失败:', e);
-            }
+        function renderParamForm(params) {
+            if (!params || params.length === 0) return '';
+            var html = '<div class="param-form-fields">';
+            params.forEach(function(p) {
+                var paramName = (p.name || '').toUpperCase();
+                var envKey = 'EZ_' + paramName;
+                html += '<div class="form-group">';
+                html += '<label>' + escapeHtml(p.name || '') + '</label>';
+                if (p.help) {
+                    html += '<span class="form-help">' + escapeHtml(p.help) + '</span>';
+                }
+                if (p.type === 'select' && p.options && p.options.length > 0) {
+                    html += '<select name="' + escapeHtml(envKey) + '">';
+                    p.options.forEach(function(opt) {
+                        var selected = (opt === p.default) ? ' selected' : '';
+                        html += '<option value="' + escapeHtml(opt) + '"' + selected + '>' + escapeHtml(opt) + '</option>';
+                    });
+                    html += '</select>';
+                } else {
+                    html += '<input type="text" name="' + escapeHtml(envKey) + '" value="' + escapeHtml(p.default || '') + '" placeholder="' + escapeHtml(p.default || '') + '">';
+                }
+                html += '</div>';
+            });
+            html += '</div>';
+            return html;
         }
 
         async function showTaskDetail(taskName) {
@@ -199,20 +193,33 @@
                 var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName) + '/params');
                 var data = await res.json();
 
-                var html = '<div class="detail-header">' +
-                    '<h3>' + escapeHtml(data.name) + '</h3>' +
-                    '</div>';
+                var html = '<div class="detail-header">';
+                html += '<h3>' + escapeHtml(data.name) + '</h3>';
+                if (data.desc) {
+                    html += '<p style="color:var(--text-muted);margin:0.3rem 0 0;">' + escapeHtml(data.desc) + '</p>';
+                }
+                html += '</div>';
 
-                if (data.details) {
-                    html += '<pre class="details-box">' + escapeHtml(data.details) + '</pre>';
-                } else {
-                    html += '<p style="color:var(--text-muted);">无详细信息</p>';
+                // 参数表单
+                html += '<form id="run-form" class="task-run-form" onsubmit="return handleRunSubmit(event)">';
+                if (data.params && data.params.length > 0) {
+                    html += '<h4 style="margin:1rem 0 0.6rem;font-size:0.95rem;">参数配置</h4>';
+                    html += renderParamForm(data.params);
                 }
 
-                container.innerHTML = html;
-                document.getElementById('task-run-form').style.display = 'block';
+                // 节点选择
+                html += '<div class="form-group" style="margin-top:1rem; padding-top:0.8rem; border-top:1px solid var(--border);">';
+                html += '<label>执行节点</label>';
+                html += '<select id="node-select"><option value="">本地执行</option></select>';
+                html += '</div>';
 
-                // 高亮当前选中
+                html += '<button type="submit" class="btn btn-primary btn-block" style="margin-top:0.8rem;">执行</button>';
+                html += '</form>';
+
+                container.innerHTML = html;
+                loadNodes();
+
+                // 高亮选中
                 document.querySelectorAll('.task-item').forEach(function(el) {
                     el.classList.remove('active');
                     var nameEl = el.querySelector('.task-name');
@@ -225,39 +232,49 @@
             }
         }
 
-        async function submitRun(taskName, vars) {
-            var node = document.getElementById('node-select').value;
+        async function loadNodes() {
             try {
-                var res = await fetch('/api/v1/tasks/run', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({task: taskName, node: node || null, vars: vars || {}})
-                });
+                var res = await fetch('/api/v1/nodes');
                 var data = await res.json();
-                if (data.job_id) {
-                    return data.job_id;
-                } else {
-                    throw new Error(data.error || '未知错误');
+                var select = document.getElementById('node-select');
+                if (select && data.nodes) {
+                    select.innerHTML = '<option value="">本地执行</option>' +
+                        data.nodes.map(function(n) {
+                            return '<option value="' + escapeHtml(n.id) + '">' + escapeHtml(n.name) + '</option>';
+                        }).join('');
                 }
             } catch (e) {
-                throw e;
+                console.error('加载节点失败:', e);
             }
         }
 
-        document.getElementById('run-form').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            if (!currentTask) return;
+        async function submitRun(taskName, vars) {
+            var nodeEl = document.getElementById('node-select');
+            var node = nodeEl ? nodeEl.value : '';
+            var res = await fetch('/api/v1/tasks/run', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({task: taskName, node: node || null, vars: vars || {}})
+            });
+            var data = await res.json();
+            if (data.job_id) return data.job_id;
+            throw new Error(data.error || '未知错误');
+        }
 
-            var varsText = document.getElementById('vars-input').value.trim();
+        async function handleRunSubmit(e) {
+            e.preventDefault();
+            if (!currentTask) return false;
+
+            // 从表单收集参数
+            var form = e.target;
             var vars = {};
-            if (varsText) {
-                try {
-                    vars = JSON.parse(varsText);
-                } catch (err) {
-                    alert('参数 JSON 格式错误');
-                    return;
+            var fields = form.querySelectorAll('input[name], select[name]');
+            fields.forEach(function(f) {
+                if (f.name && f.name !== '' && f.id !== 'node-select') {
+                    var val = f.value.trim();
+                    if (val) vars[f.name] = val;
                 }
-            }
+            });
 
             try {
                 var jobId = await submitRun(currentTask, vars);
@@ -266,7 +283,8 @@
             } catch (err) {
                 alert('提交失败: ' + err.message);
             }
-        });
+            return false;
+        }
 
         async function runSelected() {
             if (checkedTasks.size === 0) return;
@@ -288,7 +306,6 @@
 
         // 初始加载
         loadTaskTree();
-        loadNodes();
     </script>
 
     <style>
@@ -306,9 +323,70 @@
         }
 
         .task-item.active {
-            background: var(--primary-light);
+            background: var(--primary-light, #e6f4ff);
             border-left: 3px solid var(--primary);
             padding-left: calc(0.8rem - 3px);
+        }
+
+        .badge-params {
+            background: var(--primary, #1677ff);
+            color: #fff;
+        }
+
+        .badge-tool {
+            background: #722ed1;
+            color: #fff;
+        }
+
+        .detail-header h3 {
+            margin: 0;
+            font-size: 1.15rem;
+        }
+
+        .task-run-form .form-group {
+            margin-bottom: 0.8rem;
+        }
+
+        .task-run-form label {
+            display: block;
+            font-weight: 500;
+            margin-bottom: 0.3rem;
+            font-size: 0.9rem;
+        }
+
+        .form-help {
+            display: block;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-bottom: 0.3rem;
+        }
+
+        .task-run-form input[type="text"],
+        .task-run-form select {
+            width: 100%;
+            padding: 0.5rem 0.7rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 0.9rem;
+            background: var(--card-bg, #fff);
+            box-sizing: border-box;
+        }
+
+        .task-run-form input[type="text"]:focus,
+        .task-run-form select:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(22,119,255,0.15);
+        }
+
+        .param-form-fields {
+            background: var(--bg-color, #f0f2f5);
+            padding: 0.8rem;
+            border-radius: 8px;
+        }
+
+        .param-form-fields .form-group:last-child {
+            margin-bottom: 0;
         }
 
         @media (max-width: 1024px) {
