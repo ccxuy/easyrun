@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nodes - EZ Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">EZ Dashboard</div>
+        <div class="nav-links">
+            <a href="/">Overview</a>
+            <a href="/nodes" class="active">Nodes</a>
+            <a href="/tasks">Tasks</a>
+            <a href="/jobs">Jobs</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="page-header">
+            <h1>Nodes</h1>
+            <p>Connected worker nodes</p>
+        </div>
+
+        <div id="nodes-container" class="card">
+            <div class="loading">Loading nodes...</div>
+        </div>
+    </main>
+
+    <script>
+        const socket = io();
+
+        async function loadNodes() {
+            const res = await fetch('/api/v1/nodes');
+            const data = await res.json();
+            const container = document.getElementById('nodes-container');
+
+            if (data.nodes.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <h3>No Nodes Connected</h3>
+                        <p>Start a client agent to connect:</p>
+                        <code>python client/agent.py --server=http://this-server:8080 --name=my-node</code>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = `
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Status</th>
+                            <th>Tags</th>
+                            <th>Last Seen</th>
+                            <th>Current Job</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${data.nodes.map(node => `
+                            <tr>
+                                <td><strong>${node.name}</strong><br><code>${node.id}</code></td>
+                                <td><span class="status-badge ${node.status}">${node.status}</span></td>
+                                <td>${node.tags.map(t => `<span class="tag">${t}</span>`).join(' ') || '-'}</td>
+                                <td>${node.last_seen ? new Date(node.last_seen).toLocaleString() : '-'}</td>
+                                <td>${node.current_job ? `<code>${node.current_job}</code>` : '-'}</td>
+                                <td>
+                                    <button class="btn btn-sm" onclick="removeNode('${node.id}')">Remove</button>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            `;
+        }
+
+        async function removeNode(nodeId) {
+            if (!confirm('Remove this node?')) return;
+            await fetch(`/api/v1/nodes/${nodeId}`, {method: 'DELETE'});
+            loadNodes();
+        }
+
+        socket.on('node_update', loadNodes);
+        loadNodes();
+        setInterval(loadNodes, 10000);
+    </script>
+
+    <style>
+        .page-header { margin-bottom: 2rem; }
+        .page-header h1 { margin-bottom: 0.5rem; }
+        .page-header p { color: var(--text-muted); }
+        .empty-state { text-align: center; padding: 3rem; }
+        .empty-state code { display: block; margin-top: 1rem; background: rgba(255,255,255,0.1); padding: 1rem; border-radius: 4px; }
+        .tag { background: var(--primary); padding: 0.2rem 0.5rem; border-radius: 3px; font-size: 0.8rem; margin-right: 0.3rem; }
+        .btn-sm { padding: 0.3rem 0.8rem; font-size: 0.85rem; }
+    </style>
+</body>
+</html>

@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jobs - EZ Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">EZ Dashboard</div>
+        <div class="nav-links">
+            <a href="/">Overview</a>
+            <a href="/nodes">Nodes</a>
+            <a href="/tasks">Tasks</a>
+            <a href="/jobs" class="active">Jobs</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="page-header">
+            <h1>Jobs</h1>
+            <p>Task execution history</p>
+        </div>
+
+        <div class="jobs-layout">
+            <div class="card jobs-list-card">
+                <h2>Job History</h2>
+                <div id="jobs-list">
+                    <div class="loading">Loading jobs...</div>
+                </div>
+            </div>
+
+            <div class="card job-detail-card">
+                <h2>Job Details</h2>
+                <div id="job-detail">
+                    <div class="empty">Select a job to view details</div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const socket = io();
+        let selectedJobId = new URLSearchParams(window.location.search).get('id');
+
+        async function loadJobs() {
+            const res = await fetch('/api/v1/jobs');
+            const data = await res.json();
+            const container = document.getElementById('jobs-list');
+
+            if (data.jobs.length === 0) {
+                container.innerHTML = '<div class="empty">No jobs yet</div>';
+                return;
+            }
+
+            container.innerHTML = `
+                <div class="job-items">
+                    ${data.jobs.map(job => {
+                        const duration = job.finished_at && job.started_at ?
+                            Math.round((new Date(job.finished_at) - new Date(job.started_at)) / 1000) + 's' : '-';
+                        return `
+                            <div class="job-item ${job.status} ${job.id === selectedJobId ? 'selected' : ''}"
+                                 onclick="showJobDetail('${job.id}')">
+                                <div class="job-header">
+                                    <span class="job-task">${job.task}</span>
+                                    <span class="status-badge ${job.status}">${job.status}</span>
+                                </div>
+                                <div class="job-meta">
+                                    <span><code>${job.id}</code></span>
+                                    <span>${job.node_id || 'local'}</span>
+                                    <span>${duration}</span>
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+
+            // 自动选择第一个或 URL 指定的
+            if (selectedJobId && data.jobs.find(j => j.id === selectedJobId)) {
+                showJobDetail(selectedJobId);
+            } else if (data.jobs.length > 0 && !selectedJobId) {
+                showJobDetail(data.jobs[0].id);
+            }
+        }
+
+        async function showJobDetail(jobId) {
+            selectedJobId = jobId;
+            history.replaceState(null, '', `?id=${jobId}`);
+
+            // 更新选中状态
+            document.querySelectorAll('.job-item').forEach(el => {
+                el.classList.toggle('selected', el.onclick.toString().includes(jobId));
+            });
+
+            const res = await fetch(`/api/v1/jobs/${jobId}`);
+            const job = await res.json();
+
+            const container = document.getElementById('job-detail');
+            container.innerHTML = `
+                <div class="detail-header">
+                    <h3>${job.task}</h3>
+                    <span class="status-badge ${job.status}">${job.status}</span>
+                </div>
+
+                <div class="detail-info">
+                    <div class="info-row">
+                        <span class="label">Job ID</span>
+                        <span class="value"><code>${job.id}</code></span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Node</span>
+                        <span class="value">${job.node_id || 'local'}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Exit Code</span>
+                        <span class="value">${job.exit_code !== undefined ? job.exit_code : '-'}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Started</span>
+                        <span class="value">${job.started_at ? new Date(job.started_at).toLocaleString() : '-'}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Finished</span>
+                        <span class="value">${job.finished_at ? new Date(job.finished_at).toLocaleString() : '-'}</span>
+                    </div>
+                    ${Object.keys(job.vars || {}).length > 0 ? `
+                    <div class="info-row">
+                        <span class="label">Variables</span>
+                        <span class="value"><code>${JSON.stringify(job.vars)}</code></span>
+                    </div>
+                    ` : ''}
+                </div>
+
+                <div class="detail-logs">
+                    <h4>Logs</h4>
+                    <pre class="logs-box">${job.logs || '(no output)'}</pre>
+                </div>
+
+                ${['pending', 'running'].includes(job.status) ? `
+                <div class="detail-actions">
+                    <button class="btn btn-danger" onclick="cancelJob('${job.id}')">Cancel</button>
+                </div>
+                ` : ''}
+            `;
+
+            // 如果正在运行，订阅日志更新
+            if (['pending', 'running'].includes(job.status)) {
+                subscribeToLogs(jobId);
+            }
+        }
+
+        function subscribeToLogs(jobId) {
+            const evtSource = new EventSource(`/api/v1/jobs/${jobId}/logs`);
+            evtSource.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                if (data.logs) {
+                    const logsBox = document.querySelector('.logs-box');
+                    if (logsBox) {
+                        logsBox.textContent += data.logs;
+                        logsBox.scrollTop = logsBox.scrollHeight;
+                    }
+                }
+                if (data.done) {
+                    evtSource.close();
+                    loadJobs();
+                }
+            };
+        }
+
+        async function cancelJob(jobId) {
+            if (!confirm('Cancel this job?')) return;
+            await fetch(`/api/v1/jobs/${jobId}/cancel`, {method: 'POST'});
+            loadJobs();
+        }
+
+        socket.on('job_update', loadJobs);
+        socket.on('job_log_update', (data) => {
+            if (data.job_id === selectedJobId) {
+                const logsBox = document.querySelector('.logs-box');
+                if (logsBox) {
+                    logsBox.textContent += data.log + '\n';
+                    logsBox.scrollTop = logsBox.scrollHeight;
+                }
+            }
+        });
+
+        loadJobs();
+    </script>
+
+    <style>
+        .page-header { margin-bottom: 2rem; }
+        .page-header h1 { margin-bottom: 0.5rem; }
+        .page-header p { color: var(--text-muted); }
+
+        .jobs-layout {
+            display: grid;
+            grid-template-columns: 400px 1fr;
+            gap: 1.5rem;
+        }
+
+        .job-items {
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+
+        .job-item {
+            padding: 1rem;
+            background: rgba(255,255,255,0.03);
+            border-radius: 4px;
+            margin-bottom: 0.5rem;
+            cursor: pointer;
+            border-left: 3px solid var(--text-muted);
+            transition: all 0.2s;
+        }
+
+        .job-item:hover { background: rgba(255,255,255,0.06); }
+        .job-item.selected { background: rgba(255,255,255,0.08); }
+        .job-item.success { border-left-color: var(--success); }
+        .job-item.failed, .job-item.error { border-left-color: var(--danger); }
+        .job-item.running { border-left-color: var(--info); }
+        .job-item.pending { border-left-color: var(--warning); }
+
+        .job-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .job-task { font-weight: bold; }
+
+        .job-meta {
+            display: flex;
+            gap: 1rem;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .detail-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .detail-header h3 { margin: 0; }
+
+        .detail-info { margin-bottom: 1.5rem; }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .info-row .label { color: var(--text-muted); }
+        .info-row .value code { background: rgba(255,255,255,0.1); padding: 0.2rem 0.5rem; border-radius: 3px; }
+
+        .detail-logs h4 { margin-bottom: 0.5rem; color: var(--text-muted); }
+
+        .logs-box {
+            background: rgba(0,0,0,0.4);
+            padding: 1rem;
+            border-radius: 4px;
+            max-height: 400px;
+            overflow: auto;
+            font-family: monospace;
+            font-size: 0.85rem;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .detail-actions { margin-top: 1rem; }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-danger:hover { background: #c0392b; }
+
+        @media (max-width: 1024px) {
+            .jobs-layout { grid-template-columns: 1fr; }
+        }
+    </style>
+</body>
+</html>

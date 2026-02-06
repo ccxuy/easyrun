@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EZ Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">EZ Dashboard</div>
+        <div class="nav-links">
+            <a href="/" class="active">Overview</a>
+            <a href="/nodes">Nodes</a>
+            <a href="/tasks">Tasks</a>
+            <a href="/jobs">Jobs</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="dashboard">
+            <!-- 节点状态 -->
+            <div class="card">
+                <h2>Nodes</h2>
+                <div id="node-list" class="node-grid">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+
+            <!-- 活跃任务 -->
+            <div class="card">
+                <h2>Active Jobs</h2>
+                <div id="active-jobs" class="job-list">
+                    <div class="empty">No active jobs</div>
+                </div>
+            </div>
+
+            <!-- 快速执行 -->
+            <div class="card">
+                <h2>Quick Run</h2>
+                <form id="quick-run-form" class="quick-run">
+                    <select id="task-select" required>
+                        <option value="">Select a task...</option>
+                    </select>
+                    <select id="node-select">
+                        <option value="">Local (Server)</option>
+                    </select>
+                    <button type="submit" class="btn btn-primary">Run</button>
+                </form>
+            </div>
+
+            <!-- 最近任务 -->
+            <div class="card full-width">
+                <h2>Recent Jobs</h2>
+                <table id="recent-jobs" class="table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Task</th>
+                            <th>Node</th>
+                            <th>Status</th>
+                            <th>Duration</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td colspan="6" class="empty">No jobs yet</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const socket = io();
+
+        // 加载节点列表
+        async function loadNodes() {
+            const res = await fetch('/api/v1/nodes');
+            const data = await res.json();
+            const container = document.getElementById('node-list');
+            const nodeSelect = document.getElementById('node-select');
+
+            if (data.nodes.length === 0) {
+                container.innerHTML = '<div class="empty">No nodes connected</div>';
+                return;
+            }
+
+            container.innerHTML = data.nodes.map(node => `
+                <div class="node-card ${node.status}">
+                    <div class="node-name">${node.name}</div>
+                    <div class="node-status">${node.status}</div>
+                    ${node.tags.length ? `<div class="node-tags">${node.tags.join(', ')}</div>` : ''}
+                </div>
+            `).join('');
+
+            // 更新下拉框
+            nodeSelect.innerHTML = '<option value="">Local (Server)</option>' +
+                data.nodes.map(n => `<option value="${n.id}">${n.name}</option>`).join('');
+        }
+
+        // 加载任务列表
+        async function loadTasks() {
+            const res = await fetch('/api/v1/tasks');
+            const data = await res.json();
+            const select = document.getElementById('task-select');
+
+            select.innerHTML = '<option value="">Select a task...</option>' +
+                data.tasks.map(t => `<option value="${t.name}">${t.name}</option>`).join('');
+        }
+
+        // 加载任务记录
+        async function loadJobs() {
+            const res = await fetch('/api/v1/jobs');
+            const data = await res.json();
+
+            // 活跃任务
+            const activeJobs = data.jobs.filter(j => ['pending', 'running'].includes(j.status));
+            const activeContainer = document.getElementById('active-jobs');
+            if (activeJobs.length === 0) {
+                activeContainer.innerHTML = '<div class="empty">No active jobs</div>';
+            } else {
+                activeContainer.innerHTML = activeJobs.map(job => `
+                    <div class="job-item ${job.status}">
+                        <div class="job-info">
+                            <span class="job-task">${job.task}</span>
+                            <span class="job-node">${job.node_id || 'local'}</span>
+                        </div>
+                        <div class="job-status">${job.status}</div>
+                    </div>
+                `).join('');
+            }
+
+            // 最近任务表格
+            const tbody = document.querySelector('#recent-jobs tbody');
+            if (data.jobs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" class="empty">No jobs yet</td></tr>';
+            } else {
+                tbody.innerHTML = data.jobs.slice(0, 20).map(job => {
+                    const duration = job.finished_at && job.started_at ?
+                        Math.round((new Date(job.finished_at) - new Date(job.started_at)) / 1000) + 's' : '-';
+                    return `
+                        <tr class="${job.status}">
+                            <td><code>${job.id}</code></td>
+                            <td>${job.task}</td>
+                            <td>${job.node_id || 'local'}</td>
+                            <td><span class="status-badge ${job.status}">${job.status}</span></td>
+                            <td>${duration}</td>
+                            <td><a href="/jobs?id=${job.id}">View</a></td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+        }
+
+        // 快速执行
+        document.getElementById('quick-run-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const task = document.getElementById('task-select').value;
+            const node = document.getElementById('node-select').value;
+
+            if (!task) return;
+
+            const res = await fetch('/api/v1/tasks/run', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({task, node: node || null, vars: {}})
+            });
+            const data = await res.json();
+            alert(`Job submitted: ${data.job_id}`);
+            loadJobs();
+        });
+
+        // WebSocket 事件
+        socket.on('node_update', () => loadNodes());
+        socket.on('job_update', () => loadJobs());
+
+        // 初始加载
+        loadNodes();
+        loadTasks();
+        loadJobs();
+
+        // 定时刷新
+        setInterval(loadNodes, 10000);
+        setInterval(loadJobs, 5000);
+    </script>
+</body>
+</html>
