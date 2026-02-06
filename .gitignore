@@ -9,6 +9,7 @@ dep/ytt
 .ez-artifacts/
 .ez-state/
 .ez-results/
+workspace/
 
 # 导出产物
 *.tar.gz

@@ -50,6 +50,12 @@ includes:
   workspace:
     taskfile: ./17-workspace.yml
     dir: ../..
+  rerun:
+    taskfile: ./18-rerun.yml
+    dir: ../..
+  matrix:
+    taskfile: ./19-matrix.yml
+    dir: ../..
 
 tasks:
   default:
@@ -90,6 +96,10 @@ tasks:
       - task: plan-compile:all
       - cmd: echo ""
       - task: workspace:all
+      - cmd: echo ""
+      - task: rerun:all
+      - cmd: echo ""
+      - task: matrix:all
       - cmd: echo ""
       - cmd: echo "================================================"
       - cmd: echo "✓ 所有测试通过!"

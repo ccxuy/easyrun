@@ -33,7 +33,7 @@ tasks:
     cmds:
       - cmd: ./ez help | grep -q "server help"
       - cmd: ./ez help | grep -q "client help"
-      - cmd: ./ez help | grep -q "分布式"
+      - cmd: ./ez help | grep -q "Distributed"
       - cmd: echo "✓ help commands OK"
 
   server-help:

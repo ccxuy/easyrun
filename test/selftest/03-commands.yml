@@ -23,9 +23,9 @@ tasks:
     desc: "测试 ez help"
     cmds:
       - cmd: ./ez help | grep -q "go-task"
-      - cmd: ./ez help | grep -q "任务编排"
-      - cmd: ./ez help | grep -q "Tab 补全"
-      - cmd: ./ez help | grep -q "文件夹任务"
+      - cmd: ./ez help | grep -q "orchestration"
+      - cmd: ./ez help | grep -q "completion"
+      - cmd: ./ez help | grep -q "Workspace"
       - cmd: echo "✓ ez help OK"
 
   version:
@@ -47,7 +47,7 @@ tasks:
     desc: "测试 ez browse 在帮助中存在"
     cmds:
       - cmd: ./ez help | grep -q "browse"
-      - cmd: ./ez help | grep -q "交互式"
+      - cmd: ./ez help | grep -q "Interactive"
       - cmd: echo "✓ ez browse OK"
 
   show:
@@ -84,12 +84,12 @@ tasks:
   new-and-folder:
     desc: "测试 ez new"
     cmds:
-      # 创建新文件夹任务
+      # 创建新目录任务
       - cmd: ./ez new test-tmp-task
       - cmd: test -f tasks/test-tmp-task/Taskfile.yml
       - cmd: test -f tasks/test-tmp-task/task.yml
       - cmd: ./ez list -f | grep -q "test-tmp-task"
-      - cmd: ./ez show test-tmp-task | grep -q "[folder]"
+      - cmd: ./ez show test-tmp-task | grep -q "tasks/test-tmp-task"
       - cmd: ./ez test-tmp-task --no-workspace | grep -q "TODO"
       # 清理
       - cmd: rm -rf tasks/test-tmp-task
@@ -119,12 +119,12 @@ tasks:
     cmds:
       # 创建测试任务并运行以生成运行时数据
       - cmd: ./ez new test-clean-task
-      - cmd: ./ez test-clean-task --no-workspace --log 2>/dev/null || true
-      # 验证运行时目录存在
-      - cmd: test -d .ez/tasks/test-clean-task/logs || true
-      # clean 清理运行时
+      - cmd: ./ez test-clean-task --log 2>/dev/null || true
+      # 验证工作区目录存在
+      - cmd: test -d workspace/test-clean-task || true
+      # clean 清理工作区
       - cmd: ./ez clean test-clean-task | grep -q "Cleaned"
-      - cmd: test ! -d .ez/tasks/test-clean-task
+      - cmd: test ! -d workspace/test-clean-task
       # 清理
       - cmd: rm -rf tasks/test-clean-task
       - cmd: echo "✓ ez clean OK"

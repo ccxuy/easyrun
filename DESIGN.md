@@ -7,11 +7,10 @@ EZ 是 go-task 的超集前端。go-task 是执行引擎，EZ 在其上提供参
 1. **便携适配** — 拷贝即用，适配各种 Linux 执行环境。核心只依赖 Bash + 两个二进制 (go-task, yq)，无需系统级安装。首次运行自动安装依赖，离线环境支持直接拷贝 `dep/` 目录。
 2. **精简核心** — EZ 是任务编排工具。AI 交互、分布式执行（server/client）等是可选扩展接口，不膨胀核心。
 3. **超集不替代** — EZ 扩展 go-task，不替换。所有 `ez-*` 字段可被 go-task 安全忽略，EZ 生成的 Taskfile 是合法 go-task 文件。
-4. **Task 是核心** — EZ 的 task 是 go-task task 的超集：行内任务定义在根 Taskfile.yml，文件夹任务是 `tasks/` 下的自包含目录。
-5. **Workspace 默认隔离** — 文件夹任务默认在隔离工作区中执行，防止污染源码。`--no-workspace` 关闭隔离。
-6. **按粒度组织运行时** — `.ez/` 按任务/计划名称组织子目录，`rm -rf .ez/tasks/X` 即可清理单个任务的全部运行时数据。
-7. **根目录整洁** — 项目根只放核心文件（`ez`、`Taskfile.yml`），运行时和生成物统一收归 `.ez/`。
-8. **渐进增强** — 从简单的 `ez <task>` 直接执行开始，按需使用参数、计划、远程执行等高级功能。
+4. **Task 是核心** — EZ 的 task 是 go-task task 的超集：行内任务定义在根 Taskfile.yml，目录任务是 `tasks/` 下的自包含目录。
+5. **Workspace 触手可及** — 任务执行过程人工介入和 debug 是常态。workspace 在项目根目录，`.ez/` 仅存内部状态。
+6. **迭代工作流** — 支持重复性高、参数有变化、经常中断修改的场景。`rerun` 一键重复，`matrix` 多变体并行。
+7. **渐进增强** — 从简单的 `ez <task>` 直接执行开始，按需使用参数、计划、远程执行等高级功能。
 
 ---
 
@@ -23,11 +22,10 @@ EZ 是 go-task 的超集前端。go-task 是执行引擎，EZ 在其上提供参
 |------|------|
 | Task (任务) | 可执行的工作单元。go-task task 的超集，支持 `ez-*` 扩展字段 |
 | 行内任务 | 定义在根 `Taskfile.yml` 中的 task 条目 |
-| 文件夹任务 | `tasks/<name>/` 下自包含的任务目录，含 `Taskfile.yml` + `task.yml` 元数据 |
+| 目录任务 | `tasks/<name>/` 下自包含的任务目录，含 `Taskfile.yml` + `task.yml` 元数据 |
 | Plan (计划) | 多 Task 的编排，定义执行顺序和依赖，编译为标准 go-task Taskfile |
 | Step (步骤) | Plan 内的单个环节 |
-| Artifact (产物) | Task 的输出文件，可被下游引用 |
-| Workspace (工作区) | 隔离的执行目录，防止污染任务源码 |
+| Workspace (工作区) | 项目根 `workspace/` 下的隔离执行目录，防止污染源码 |
 
 **任务生命周期**: `pending → running → success / failed`
 
@@ -41,27 +39,28 @@ project/
 │   └── completion/           # Tab 补全脚本
 ├── dep/                      # 依赖二进制 (go-task, yq)
 ├── Taskfile.yml              # 根 Taskfile（行内任务）
-├── tasks/                    # 文件夹任务（EZ 自动发现）
+├── tasks/                    # 目录任务（EZ 自动发现）
 │   └── kernel-build/
 │       ├── Taskfile.yml      # go-task 执行定义
 │       ├── task.yml          # EZ 元数据（可选）
 │       └── scripts/          # 辅助脚本
 ├── plans/                    # Plan 定义
 │   └── kernel-ci.yml
-├── .ez/                      # 运行时数据（gitignore）
-│   ├── tasks/<name>/         # 按任务粒度
-│   │   ├── workspace/        #   隔离工作区
-│   │   ├── logs/             #   执行日志
-│   │   └── artifacts/        #   输出产物
-│   ├── plans/<name>/         # 按计划粒度
-│   │   ├── build/            #   编译输出
-│   │   ├── logs/             #   执行日志
-│   │   └── state/            #   恢复状态
-│   └── workspace/            # ad-hoc 工作区（--workspace=name）
+├── workspace/                # 执行工作区（gitignore，项目根目录）
+│   ├── kernel-build/         #   任务默认工作区
+│   │   ├── src -> ../..      #   符号链接到项目根
+│   │   ├── Taskfile.yml      #   任务定义副本
+│   │   ├── .ez-run.yml       #   运行上下文（用于 rerun）
+│   │   └── logs/             #   工作区本地日志
+│   └── kernel-build--arm64/  #   变体工作区（matrix）
+├── .ez/                      # 内部状态（gitignore）
+│   ├── plans/<name>/         #   按计划粒度
+│   │   ├── build/            #     编译输出
+│   │   └── state/            #     恢复状态
+│   └── logs/                 #   全局日志（非工作区运行）
 ├── test/selftest/            # 自测试套件
 ├── server/                   # Server + Client（可选，分布式组件）
 │   └── client/               #   Client Agent
-├── docs/                     # 详细文档
 ├── DESIGN.md                 # 本文件
 ├── PLAN.md                   # 开发计划
 └── README.md                 # 基础用法
@@ -101,15 +100,15 @@ tasks:
 
 约束：所有 `ez-*` 字段必须能被 go-task 安全忽略。
 
-### 文件夹任务
+### 目录任务
 
-`tasks/<name>/` 目录下的自包含任务。每个文件夹任务包含：
+`tasks/<name>/` 目录下的自包含任务。每个目录任务包含：
 
 - `Taskfile.yml` — go-task 执行定义（必需）
 - `task.yml` — EZ 元数据（可选）
 - `scripts/`、`config/` 等辅助文件
 
-文件夹任务在 `ez list` 中以 `[folder]` 标记显示。
+目录任务在 `ez list` 中以 `[dir]` 标记显示。
 
 ### task.yml 元数据
 
@@ -151,13 +150,13 @@ examples:
 EZ 自动合并两种来源：
 
 1. **根 Taskfile 任务** — `Taskfile.yml` 中的 tasks 条目（go-task 原生）
-2. **文件夹任务** — `tasks/` 下包含 `Taskfile.yml` 的子文件夹
+2. **目录任务** — `tasks/` 下包含 `Taskfile.yml` 的子目录
 
-文件夹任务通过 `task -d tasks/<name> default` 委托 go-task 执行。
+目录任务通过 `task -d tasks/<name> default` 委托 go-task 执行。
 
 ### Workspace 隔离
 
-文件夹任务默认在 `.ez/tasks/<name>/workspace/` 中执行，源码目录通过符号链接挂载。
+目录任务默认在 `workspace/<name>/` 中执行，源码目录通过符号链接挂载。Workspace 在项目根目录，方便 debug 和人工介入。
 
 ```bash
 ez my-task                  # 默认在 workspace 中执行
@@ -168,11 +167,46 @@ ez hello --workspace=debug  # 指定 workspace 名称
 
 Workspace 目录结构：
 ```
-.ez/tasks/my-task/workspace/
-├── src -> ../../tasks/my-task/  # 符号链接到源码
-├── Taskfile.yml                 # 复制
+workspace/my-task/
+├── src -> ../..                # 符号链接到项目根
+├── Taskfile.yml                # 复制
+├── .ez-run.yml                 # 运行上下文（rerun 用）
+├── logs/                       # 工作区本地日志
 └── (执行产物)
 ```
+
+### Rerun 迭代工作流
+
+每次工作区执行后自动保存运行上下文（`.ez-run.yml`），支持一键重复：
+
+```bash
+# 首次运行
+ez plan run kernel-ci -w ci-x86 EZ_ARCH=x86_64
+
+# 修改代码后重新运行
+ez rerun ci-x86
+
+# 覆盖部分参数
+ez rerun ci-x86 EZ_ARCH=arm64
+
+# 重复最近一次执行
+ez rerun
+```
+
+### Matrix 多变体并行
+
+```bash
+# 单维度: 3 个架构并行
+ez matrix kernel-build --vary EZ_ARCH=x86_64,arm64,riscv64
+
+# 二维度: 架构 x 配置
+ez matrix kernel-build --vary EZ_ARCH=x86_64,arm64 --vary EZ_CONFIG=defconfig,allmodconfig
+
+# 固定参数 + 变化参数
+ez matrix kernel-build --vary EZ_ARCH=x86_64,arm64 EZ_JOBS=8
+```
+
+每个变体创建独立工作区 `workspace/<task>--<variant>/`，并行执行后汇总结果。
 
 ---
 

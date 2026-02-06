@@ -24,42 +24,49 @@ cmd_version() {
 # -----------------------------------------------------------------------------
 cmd_help() {
     cat << 'EOF'
-EZ - go-task 任务编排前端
+EZ - go-task task orchestration frontend
 
-用法: ez [命令] [选项]
+Usage: ez [command] [options]
 
-任务执行:
-    ez                    列出所有任务
-    ez <name>             执行任务 (= ez run <name>)
-    ez <name> --dry-run   预览命令
+Task execution:
+    ez                    List all tasks
+    ez <name>             Execute task (= ez run <name>)
+    ez <name> --dry-run   Preview command
 
-任务管理:
-    new <name>            创建文件夹任务 (tasks/<name>/)
-    show <name>           查看任务详情和参数
-    export / import       导出/导入文件夹任务
-    check [name]          验证语法
-    clean <name|--all>    清理运行时数据
+Task management:
+    new <name>            Create task directory (tasks/<name>/)
+    show <name>           Show task details and params
+    export / import       Export/import task directory
+    check [name]          Validate syntax
+    clean <name|--all>    Clean runtime data
 
-计划编排:
-    plan <name>           执行计划 (= plan run <name>)
+Plan orchestration:
+    plan <name>           Execute plan (= plan run <name>)
     plan list / new / show / build / check
-                          计划管理子命令
+                          Plan management subcommands
 
-工具:
-    browse                交互式任务浏览
-    log list / show       执行日志
-    completion bash|zsh   Tab 补全
+Workspace:
+    ws                    List workspaces
+    ws <name>             Show workspace details
+    ws clean <name|--all> Clean workspaces
+    rerun <workspace>     Re-execute with saved params
+    matrix <task> --vary  Multi-variant parallel execution
 
-选项:
-    --dry-run             预览不执行
-    --log                 记录日志
-    --workspace=<name>    隔离执行 (auto = 自动命名)
-    --no-workspace        源目录执行
+Tools:
+    browse                Interactive task browser
+    log list / show       Execution logs
+    completion bash|zsh   Tab completion
 
-ez version              版本信息
-ez help                 本帮助
+Options:
+    --dry-run             Preview without execution
+    --log                 Record execution log
+    -w, --workspace=<name>  Isolated execution (auto = auto-name)
+    --no-workspace        Execute in source directory
 
-分布式 (可选): ez server help / ez client help
+ez version              Version info
+ez help                 This help
+
+Distributed (optional): ez server help / ez client help
 EOF
 }
 
@@ -118,7 +125,7 @@ cmd_list() {
 
     # 收集根 Taskfile 任务
     local visible_tasks=()
-    local task_sources=()  # 标记来源: "" = 根, "[folder]" = 文件夹任务
+    local task_sources=()  # source marker: "" = root, "[dir]" = dir task
     while IFS= read -r name; do
         [[ -z "$name" ]] && continue
         if [[ "$name" == _* ]] && ! $show_all; then
@@ -131,7 +138,7 @@ cmd_list() {
         task_sources+=("")
     done <<< "$tasks"
 
-    # 收集文件夹任务 (tasks/ 目录)
+    # 收集目录任务 (tasks/ 目录)
     if [[ -d "$EZ_TASKS_DIR" ]]; then
         while IFS= read -r name; do
             [[ -z "$name" ]] && continue
@@ -145,9 +152,9 @@ cmd_list() {
             done
             if ! $dup; then
                 visible_tasks+=("$name")
-                task_sources+=("[folder]")
+                task_sources+=("[dir]")
             fi
-        done < <(get_folder_tasks)
+        done < <(get_dir_tasks)
     fi
 
     local total=${#visible_tasks[@]}
@@ -166,11 +173,11 @@ cmd_list() {
             local source="${task_sources[$idx]}"
             local desc="" flags=""
 
-            if [[ "$source" == "[folder]" ]]; then
-                # 文件夹任务：从 tasks/ 子目录 Taskfile 读取描述
+            if [[ "$source" == "[dir]" ]]; then
+                # 目录任务：从 tasks/ 子目录 Taskfile 读取描述
                 local ftfile="$EZ_TASKS_DIR/$name/Taskfile.yml"
                 desc=$(get_task_prop "$ftfile" "default" "desc" 2>/dev/null || true)
-                flags=" ${MAGENTA}[folder]${NC}"
+                flags=" ${DIM}[dir]${NC}"
             else
                 desc=$(get_task_prop "$taskfile" "$name" "desc")
                 has_ez_params "$taskfile" "$name" && flags+=" ${CYAN}[params]${NC}"
@@ -214,10 +221,10 @@ cmd_list() {
             local source="${no_prefix_sources[$idx]}"
             local desc=""
             local flags=""
-            if [[ "$source" == "[folder]" ]]; then
+            if [[ "$source" == "[dir]" ]]; then
                 local ftfile="$EZ_TASKS_DIR/$name/Taskfile.yml"
                 desc=$(get_task_prop "$ftfile" "default" "desc" 2>/dev/null || true)
-                flags=" ${MAGENTA}[folder]${NC}"
+                flags=" ${DIM}[dir]${NC}"
             else
                 desc=$(get_task_prop "$taskfile" "$name" "desc")
             fi
@@ -237,10 +244,10 @@ cmd_list() {
             if [[ $shown -lt 3 ]]; then
                 local source="${group_sources["${prefix}_${name}"]}"
                 local desc="" flags=""
-                if [[ "$source" == "[folder]" ]]; then
+                if [[ "$source" == "[dir]" ]]; then
                     local ftfile="$EZ_TASKS_DIR/$name/Taskfile.yml"
                     desc=$(get_task_prop "$ftfile" "default" "desc" 2>/dev/null || true)
-                    flags=" ${MAGENTA}[folder]${NC}"
+                    flags=" ${DIM}[dir]${NC}"
                 else
                     desc=$(get_task_prop "$taskfile" "$name" "desc")
                 fi
@@ -429,11 +436,11 @@ cmd_show() {
     local taskfile
     taskfile=$(find_taskfile ".") || die "未找到 Taskfile"
 
-    # 检查是否是文件夹任务
-    if is_folder_task "$task"; then
+    # 检查是否是目录任务
+    if is_dir_task "$task"; then
         local task_dir="$EZ_TASKS_DIR/$task"
         local ftfile="$task_dir/Taskfile.yml"
-        echo -e "${BOLD}Task: ${GREEN}$task${NC} ${MAGENTA}[folder]${NC}"
+        echo -e "${BOLD}Task: ${GREEN}$task${NC} ${DIM}(tasks/$task/)${NC}"
         echo ""
         echo -e "${BOLD}Directory:${NC} $task_dir/"
         echo ""
@@ -751,8 +758,8 @@ cmd_run() {
         return $?
     fi
 
-    # 检查是否是文件夹任务 — 默认在 workspace 中执行
-    if is_folder_task "$task"; then
+    # 检查是否是目录任务 — 默认在 workspace 中执行
+    if is_dir_task "$task"; then
         if [[ "$no_workspace" == "true" ]]; then
             _run_folder_task "$task" "$dry_run" "$enable_log" "${extra_vars[@]}"
         else
@@ -885,7 +892,7 @@ cmd_run() {
 }
 
 # -----------------------------------------------------------------------------
-# 执行文件夹任务 (直接在 tasks/ 目录)
+# 执行目录任务 (直接在 tasks/ 目录)
 # -----------------------------------------------------------------------------
 _run_folder_task() {
     local task="$1" dry_run="$2" enable_log="$3"
@@ -906,13 +913,13 @@ _run_folder_task() {
         return 0
     fi
 
-    echo -e "${BOLD}Running:${NC} ${GREEN}$task${NC} ${MAGENTA}[folder]${NC}"
+    echo -e "${BOLD}Running:${NC} ${GREEN}$task${NC}"
     echo -e "  ${DIM}Dir: $task_dir${NC}"
     echo ""
 
     if [[ "$enable_log" == "true" ]]; then
         local log_file
-        log_file=$(get_log_path "$task" "$(date +%s)" "$task")
+        log_file=$(get_log_path "$task" "$(date +%s)")
         write_log_header "$log_file" "$task" "" ""
         echo -e "  ${DIM}Log: $log_file${NC}"
         local start_time=$(date +%s)
@@ -929,7 +936,7 @@ _run_folder_task() {
 }
 
 # -----------------------------------------------------------------------------
-# 执行文件夹任务 (默认在 .ez/tasks/<name>/workspace/ 中)
+# 执行目录任务 (默认在 workspace/<name>/ 中)
 # -----------------------------------------------------------------------------
 _run_folder_task_in_workspace() {
     local task="$1" dry_run="$2" enable_log="$3"
@@ -940,14 +947,14 @@ _run_folder_task_in_workspace() {
     local ftfile="$task_dir/Taskfile.yml"
     [[ -f "$ftfile" ]] || ftfile="$task_dir/Taskfile.yaml"
 
-    # 创建文件夹任务默认 workspace
+    # 创建目录任务默认 workspace at project root
     local ws_dir
-    ws_dir=$(create_workspace "default" "$task")
+    ws_dir=$(create_workspace "$task")
 
-    # 复制文件夹任务的 Taskfile 到 workspace (非根 Taskfile)
+    # 复制目录任务的 Taskfile 到 workspace (非根 Taskfile)
     cp "$ftfile" "$ws_dir/Taskfile.yml"
 
-    echo -e "${BOLD}Task:${NC} ${GREEN}$task${NC} ${MAGENTA}[folder]${NC}"
+    echo -e "${BOLD}Task:${NC} ${GREEN}$task${NC}"
     echo -e "  ${DIM}Workspace: $ws_dir${NC}"
     echo ""
 
@@ -961,20 +968,26 @@ _run_folder_task_in_workspace() {
         return 0
     fi
 
+    local start_time=$(date +%s)
+    local exit_code=0
+
     if [[ "$enable_log" == "true" ]]; then
         local log_file
         log_file=$(get_log_path "$task" "$(date +%s)" "$task")
-        write_log_header "$log_file" "$task" "" "workspace"
+        write_log_header "$log_file" "$task" "" "workspace=$task"
         echo -e "  ${DIM}Log: $log_file${NC}"
-        local start_time=$(date +%s)
-        local exit_code=0
         "${cmd[@]}" 2>&1 | tee -a "$log_file" || exit_code=$?
         local end_time=$(date +%s)
         write_log_footer "$log_file" "$exit_code" "$((end_time - start_time))"
-        return $exit_code
     else
-        "${cmd[@]}"
+        "${cmd[@]}" || exit_code=$?
+        local end_time=$(date +%s)
     fi
+
+    # Save run context for rerun
+    save_run_context "$ws_dir" "$task" "$exit_code" "$((end_time - start_time))" "${extra_vars[@]}"
+
+    return $exit_code
 }
 
 # -----------------------------------------------------------------------------
@@ -1008,21 +1021,26 @@ _run_in_workspace() {
         cmd+=("$v")
     done
 
+    local start_time=$(date +%s)
+    local exit_code=0
+
     if [[ "$enable_log" == "true" ]]; then
-        init_log_dir
         local log_file
-        log_file=$(get_log_path "$task" "$(date +%s)")
+        log_file=$(get_log_path "$task" "$(date +%s)" "$ws_name")
         write_log_header "$log_file" "$task" "" "workspace=$ws_name"
         echo -e "  ${DIM}Log: $log_file${NC}"
-        local start_time=$(date +%s)
-        local exit_code=0
         "${cmd[@]}" 2>&1 | tee -a "$log_file" || exit_code=$?
         local end_time=$(date +%s)
         write_log_footer "$log_file" "$exit_code" "$((end_time - start_time))"
-        return $exit_code
     else
-        "${cmd[@]}"
+        "${cmd[@]}" || exit_code=$?
+        local end_time=$(date +%s)
     fi
+
+    # Save run context for rerun
+    save_run_context "$ws_dir" "$task" "$exit_code" "$((end_time - start_time))" "${extra_vars[@]}"
+
+    return $exit_code
 }
 
 # -----------------------------------------------------------------------------
@@ -2156,7 +2174,7 @@ cmd_plugin() {
 }
 
 # -----------------------------------------------------------------------------
-# 命令: new (创建文件夹任务)
+# 命令: new (创建目录任务)
 # -----------------------------------------------------------------------------
 cmd_new() {
     local name="${1:-}"
@@ -2225,7 +2243,7 @@ cmd_check() {
             ((errors++))
         fi
 
-        # 检查文件夹任务
+        # 检查目录任务
         if [[ -d "$EZ_TASKS_DIR" ]]; then
             for dir in "$EZ_TASKS_DIR"/*/; do
                 [[ ! -d "$dir" ]] && continue
@@ -2270,7 +2288,7 @@ cmd_check() {
         echo -e "${BOLD}Checking task: $target${NC}"
         echo ""
 
-        if is_folder_task "$target"; then
+        if is_dir_task "$target"; then
             local tfile="$EZ_TASKS_DIR/$target/Taskfile.yml"
             if "$YQ" eval '.' "$tfile" &>/dev/null; then
                 echo -e "  ${GREEN}✓${NC} Taskfile syntax OK"
@@ -2379,7 +2397,7 @@ _ez_complete() {
 
     case $COMP_CWORD in
         1)
-            local cmds="list show new check browse plan template plugin log server client help version run completion"
+            local cmds="list show new check browse plan template plugin log rerun ws matrix server client help version run completion"
             local tasks=$(_ez_task_names 2>/dev/null)
             COMPREPLY=($(compgen -W "$cmds $tasks" -- "$cur"))
             ;;
@@ -2408,6 +2426,12 @@ _ez_complete() {
                     ;;
                 completion)
                     COMPREPLY=($(compgen -W "bash zsh" -- "$cur"))
+                    ;;
+                rerun)
+                    COMPREPLY=($(compgen -W "$(_ez_ws_names)" -- "$cur"))
+                    ;;
+                ws)
+                    COMPREPLY=($(compgen -W "clean $(_ez_ws_names)" -- "$cur"))
                     ;;
                 new)
                     # 不补全，用户需要输入新名称
@@ -2442,6 +2466,10 @@ _ez_plan_names() {
     "$ez_bin" plan list 2>/dev/null | awk 'NF>0 && !/^Plans/ && !/^\(/ {print $1}'
 }
 
+_ez_ws_names() {
+    ls workspace/ 2>/dev/null
+}
+
 complete -F _ez_complete ez
 complete -F _ez_complete ./ez
 COMPLETION_EOF
@@ -2458,13 +2486,16 @@ _ez() {
         'list:列出任务'
         'show:显示任务详情'
         'run:运行任务'
-        'new:创建文件夹任务'
+        'new:创建目录任务'
         'check:验证任务'
         'browse:交互式浏览器'
         'plan:计划管理'
         'template:模板管理'
         'plugin:插件管理'
         'log:日志管理'
+        'rerun:重复执行'
+        'ws:工作区管理'
+        'matrix:多变体并行'
         'server:服务器管理'
         'client:客户端管理'
         'completion:输出补全脚本'
@@ -2714,16 +2745,16 @@ EOF
 }
 
 # -----------------------------------------------------------------------------
-# 命令: export/import (文件夹任务管理)
+# 命令: export/import (目录任务管理)
 # -----------------------------------------------------------------------------
 cmd_folder_list() {
     if [[ ! -d "$EZ_TASKS_DIR" ]] || [[ -z "$(ls -A "$EZ_TASKS_DIR" 2>/dev/null)" ]]; then
-        echo "  (无文件夹任务)"
-        echo -e "  ${DIM}提示: ez new <name> 创建新文件夹任务${NC}"
+        echo "  (no dir tasks)"
+        echo -e "  ${DIM}Hint: ez new <name> to create${NC}"
         return
     fi
 
-    echo -e "${BOLD}Folder Tasks:${NC}"
+    echo -e "${BOLD}Dir Tasks:${NC}"
     echo ""
     for dir in "$EZ_TASKS_DIR"/*/; do
         [[ ! -d "$dir" ]] && continue
@@ -2778,8 +2809,382 @@ cmd_folder_manage() {
         show)       cmd_folder_show "$@" ;;
         export)     cmd_export "$@" ;;
         import)     cmd_import "$@" ;;
-        *)          die "未知子命令: $subcmd，可用: list, show, export, import" ;;
+        *)          die "Unknown subcommand: $subcmd, available: list, show, export, import" ;;
     esac
+}
+
+# -----------------------------------------------------------------------------
+# 命令: rerun (重复执行工作区任务)
+# -----------------------------------------------------------------------------
+cmd_rerun() {
+    local ws_name="${1:-}"
+    shift || true
+    local -a override_vars=("$@")
+
+    # No argument: find most recent workspace
+    if [[ -z "$ws_name" ]]; then
+        if [[ ! -d "$EZ_WORKSPACE_DIR" ]]; then
+            die "No workspaces found. Run a task first."
+        fi
+        local latest_dir=""
+        local latest_time=0
+        for dir in "$EZ_WORKSPACE_DIR"/*/; do
+            [[ ! -d "$dir" ]] && continue
+            if [[ -f "$dir/.ez-run.yml" ]]; then
+                local mtime
+                mtime=$(stat -c %Y "$dir/.ez-run.yml" 2>/dev/null || echo 0)
+                if [[ "$mtime" -gt "$latest_time" ]]; then
+                    latest_time="$mtime"
+                    latest_dir="$dir"
+                fi
+            fi
+        done
+        if [[ -z "$latest_dir" ]]; then
+            die "No workspace with run context found. Run a task with workspace first."
+        fi
+        ws_name=$(basename "$latest_dir")
+    fi
+
+    local ws_dir="$EZ_WORKSPACE_DIR/$ws_name"
+    local ctx_file="$ws_dir/.ez-run.yml"
+
+    if [[ ! -f "$ctx_file" ]]; then
+        die "No run context found in workspace: $ws_name\n  Missing: $ctx_file"
+    fi
+
+    # Read context
+    local task plan
+    task=$("$YQ" eval '.task // ""' "$ctx_file" 2>/dev/null)
+    plan=$("$YQ" eval '.plan // ""' "$ctx_file" 2>/dev/null)
+    [[ "$task" == "null" ]] && task=""
+    [[ "$plan" == "null" ]] && plan=""
+
+    # Collect saved params
+    local -a saved_params=()
+    local param_count
+    param_count=$("$YQ" eval '.params | length' "$ctx_file" 2>/dev/null || echo 0)
+    if [[ "$param_count" -gt 0 && "$param_count" != "null" ]]; then
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && saved_params+=("$line")
+        done < <("$YQ" eval '.params | to_entries | .[] | .key + "=" + .value' "$ctx_file" 2>/dev/null)
+    fi
+
+    # Apply overrides: override_vars replace matching keys
+    local -a final_params=()
+    local -A override_map=()
+    for v in "${override_vars[@]}"; do
+        if [[ "$v" == *=* ]]; then
+            local key="${v%%=*}"
+            override_map["$key"]="$v"
+        fi
+    done
+
+    for p in "${saved_params[@]}"; do
+        local key="${p%%=*}"
+        if [[ -n "${override_map[$key]+x}" ]]; then
+            final_params+=("${override_map[$key]}")
+            unset 'override_map[$key]'
+        else
+            final_params+=("$p")
+        fi
+    done
+    # Add remaining overrides (new params not in saved)
+    for v in "${override_map[@]}"; do
+        final_params+=("$v")
+    done
+
+    echo -e "${BOLD}Rerun:${NC} ${MAGENTA}$ws_name${NC}"
+    if [[ -n "$task" ]]; then
+        echo -e "  Task: ${GREEN}$task${NC}"
+    elif [[ -n "$plan" ]]; then
+        echo -e "  Plan: ${GREEN}$plan${NC}"
+    fi
+    if [[ ${#final_params[@]} -gt 0 ]]; then
+        echo -e "  Params: ${final_params[*]}"
+    fi
+    echo ""
+
+    # Re-execute
+    if [[ -n "$task" ]]; then
+        if is_dir_task "$task"; then
+            _run_folder_task_in_workspace "$task" "false" "false" "${final_params[@]}"
+        else
+            _run_in_workspace "" "$task" "$ws_name" "false" "false" "${final_params[@]}"
+        fi
+    elif [[ -n "$plan" ]]; then
+        cmd_plan "run" "$plan" "-w" "$ws_name" "${final_params[@]}"
+    else
+        die "Invalid run context: neither task nor plan specified"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# 命令: ws (工作区管理)
+# -----------------------------------------------------------------------------
+cmd_ws() {
+    local subcmd="${1:-list}"
+    shift || true
+
+    case "$subcmd" in
+        list|ls)
+            if [[ ! -d "$EZ_WORKSPACE_DIR" ]] || [[ -z "$(ls -A "$EZ_WORKSPACE_DIR" 2>/dev/null)" ]]; then
+                echo "  (no workspaces)"
+                echo -e "  ${DIM}Hint: ez <task> to create a workspace${NC}"
+                return
+            fi
+            echo -e "${BOLD}Workspaces:${NC} (workspace/)"
+            echo ""
+            while IFS= read -r line; do
+                local name info created
+                name=$(echo "$line" | awk '{print $1}')
+                info=$(echo "$line" | awk '{print $2}')
+                created=$(echo "$line" | cut -d' ' -f3-)
+                if [[ -n "$info" ]]; then
+                    printf "  ${GREEN}%-25s${NC} %-25s %s\n" "$name" "$info" "$created"
+                else
+                    printf "  ${GREEN}%-25s${NC} %s\n" "$name" "$created"
+                fi
+            done < <(list_workspaces)
+            ;;
+        clean)
+            local target="${1:-}"
+            if [[ "$target" == "--all" ]]; then
+                rm -rf "$EZ_WORKSPACE_DIR"
+                echo -e "${GREEN}✓ Cleaned: all workspaces${NC}"
+            elif [[ -n "$target" ]]; then
+                if [[ -d "$EZ_WORKSPACE_DIR/$target" ]]; then
+                    rm -rf "$EZ_WORKSPACE_DIR/$target"
+                    echo -e "${GREEN}✓ Cleaned: workspace/$target/${NC}"
+                else
+                    die "Workspace not found: $target"
+                fi
+            else
+                die "Usage: ez ws clean <name|--all>"
+            fi
+            ;;
+        *)
+            # Show workspace details
+            local name="$subcmd"
+            local ws_dir="$EZ_WORKSPACE_DIR/$name"
+            if [[ ! -d "$ws_dir" ]]; then
+                die "Workspace not found: $name"
+            fi
+            echo -e "${BOLD}Workspace:${NC} ${GREEN}$name${NC}"
+            echo -e "  Dir: $ws_dir"
+            if [[ -f "$ws_dir/.ez-run.yml" ]]; then
+                echo -e "  ${DIM}--- Run Context ---${NC}"
+                local task plan exit_code timestamp duration
+                task=$("$YQ" eval '.task // ""' "$ws_dir/.ez-run.yml" 2>/dev/null)
+                plan=$("$YQ" eval '.plan // ""' "$ws_dir/.ez-run.yml" 2>/dev/null)
+                exit_code=$("$YQ" eval '.exit_code // ""' "$ws_dir/.ez-run.yml" 2>/dev/null)
+                timestamp=$("$YQ" eval '.timestamp // ""' "$ws_dir/.ez-run.yml" 2>/dev/null)
+                duration=$("$YQ" eval '.duration // ""' "$ws_dir/.ez-run.yml" 2>/dev/null)
+                [[ -n "$task" && "$task" != "null" ]] && echo -e "  Task: $task"
+                [[ -n "$plan" && "$plan" != "null" ]] && echo -e "  Plan: $plan"
+                [[ -n "$exit_code" && "$exit_code" != "null" ]] && echo -e "  Exit: $exit_code"
+                [[ -n "$duration" && "$duration" != "null" ]] && echo -e "  Duration: ${duration}s"
+                [[ -n "$timestamp" && "$timestamp" != "null" ]] && echo -e "  Last run: $timestamp"
+                # Show params
+                local param_count
+                param_count=$("$YQ" eval '.params | length' "$ws_dir/.ez-run.yml" 2>/dev/null || echo 0)
+                if [[ "$param_count" -gt 0 && "$param_count" != "null" ]]; then
+                    echo -e "  Params:"
+                    "$YQ" eval '.params | to_entries | .[] | "    " + .key + "=" + .value' "$ws_dir/.ez-run.yml" 2>/dev/null
+                fi
+            else
+                echo -e "  ${DIM}(no run context)${NC}"
+            fi
+            ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
+# 命令: matrix (多变体并行执行)
+# -----------------------------------------------------------------------------
+cmd_matrix() {
+    local task=""
+    local dry_run="false"
+    local -a vary_specs=()
+    local -a fixed_vars=()
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --vary)
+                shift
+                [[ $# -gt 0 ]] || die "Usage: ez matrix <task> --vary KEY=val1,val2 [--vary KEY2=a,b] [FIXED=val]"
+                vary_specs+=("$1")
+                shift
+                ;;
+            --dry-run)
+                dry_run="true"
+                shift
+                ;;
+            *=*)
+                fixed_vars+=("$1")
+                shift
+                ;;
+            *)
+                if [[ -z "$task" ]]; then
+                    task="$1"
+                    shift
+                else
+                    die "Unknown argument: $1"
+                fi
+                ;;
+        esac
+    done
+
+    [[ -n "$task" ]] || die "Usage: ez matrix <task> --vary KEY=val1,val2 [--vary KEY2=a,b] [FIXED=val]"
+    [[ ${#vary_specs[@]} -gt 0 ]] || die "At least one --vary is required"
+
+    # Parse vary specs into arrays
+    local -a vary_keys=()
+    local -a vary_values=()
+    for spec in "${vary_specs[@]}"; do
+        local key="${spec%%=*}"
+        local vals="${spec#*=}"
+        vary_keys+=("$key")
+        vary_values+=("$vals")
+    done
+
+    # Generate all combinations
+    local -a combinations=()
+    _generate_combinations "" 0
+
+    local total=${#combinations[@]}
+    echo -e "${BOLD}Matrix:${NC} ${GREEN}$task${NC} x $total variants"
+    echo ""
+
+    if [[ "$dry_run" == "true" ]]; then
+        for combo in "${combinations[@]}"; do
+            local variant_name=$(_combo_to_variant "$combo")
+            echo -e "  ${DIM}[dry-run]${NC} workspace/${task}--${variant_name}/"
+            echo -e "    ${combo} ${fixed_vars[*]}"
+        done
+        echo ""
+        echo -e "${BOLD}Total:${NC} $total variants (dry run)"
+        return 0
+    fi
+
+    # Run all variants in parallel
+    local -a pids=()
+    local -a ws_names=()
+    local -a variant_labels=()
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    for combo in "${combinations[@]}"; do
+        # Build variant name and params
+        local variant_name
+        variant_name=$(_combo_to_variant "$combo")
+        local -a combo_vars=()
+        IFS=',' read -ra parts <<< "$combo"
+        for part in "${parts[@]}"; do
+            combo_vars+=("$part")
+        done
+
+        local ws_name="${task}--${variant_name}"
+        ws_names+=("$ws_name")
+        variant_labels+=("$variant_name")
+
+        # Merge fixed vars
+        local -a all_vars=("${combo_vars[@]}" "${fixed_vars[@]}")
+
+        # Run in background
+        (
+            if is_dir_task "$task"; then
+                # For dir tasks: create variant workspace manually
+                local task_dir="$EZ_TASKS_DIR/$task"
+                local ftfile="$task_dir/Taskfile.yml"
+                [[ -f "$ftfile" ]] || ftfile="$task_dir/Taskfile.yaml"
+                local ws_dir
+                ws_dir=$(create_workspace "$ws_name")
+                cp "$ftfile" "$ws_dir/Taskfile.yml"
+                local -a cmd=("$TASK" "-d" "$ws_dir" "default")
+                for v in "${all_vars[@]}"; do cmd+=("$v"); done
+                local start_time=$(date +%s)
+                "${cmd[@]}" > "$tmpdir/${variant_name}.out" 2>&1
+                local rc=$?
+                local end_time=$(date +%s)
+                save_run_context "$ws_dir" "$task" "$rc" "$((end_time - start_time))" "${all_vars[@]}"
+                echo $rc > "$tmpdir/${variant_name}.exit"
+            else
+                local taskfile
+                taskfile=$(find_taskfile ".") || exit 1
+                _run_in_workspace "$taskfile" "$task" "$ws_name" "false" "false" "${all_vars[@]}" > "$tmpdir/${variant_name}.out" 2>&1
+                echo $? > "$tmpdir/${variant_name}.exit"
+            fi
+        ) &
+        pids+=($!)
+        echo -e "  ${DIM}[started]${NC} $variant_name (pid $!)"
+    done
+
+    echo ""
+    echo -e "${DIM}Waiting for $total variants...${NC}"
+    echo ""
+
+    # Wait for all
+    local pass=0 fail=0
+    for i in "${!pids[@]}"; do
+        local pid=${pids[$i]}
+        local label=${variant_labels[$i]}
+        local ws=${ws_names[$i]}
+
+        wait $pid 2>/dev/null
+        local exit_code=0
+        [[ -f "$tmpdir/${label}.exit" ]] && exit_code=$(cat "$tmpdir/${label}.exit")
+
+        if [[ "$exit_code" == "0" ]]; then
+            echo -e "  ${GREEN}PASS${NC}  $label   (workspace/${ws}/)"
+            pass=$((pass + 1))
+        else
+            echo -e "  ${RED}FAIL${NC}  $label   (exit $exit_code)"
+            fail=$((fail + 1))
+        fi
+    done
+
+    rm -rf "$tmpdir"
+
+    echo ""
+    echo -e "${BOLD}Matrix Results:${NC} $pass passed, $fail failed (of $total)"
+
+    [[ $fail -eq 0 ]] && return 0 || return 1
+}
+
+# 递归生成所有 vary 组合
+_generate_combinations() {
+    local prefix="$1"
+    local depth="$2"
+
+    if [[ $depth -ge ${#vary_keys[@]} ]]; then
+        combinations+=("$prefix")
+        return
+    fi
+
+    local key="${vary_keys[$depth]}"
+    local vals="${vary_values[$depth]}"
+    IFS=',' read -ra val_array <<< "$vals"
+
+    for v in "${val_array[@]}"; do
+        local new_prefix="$prefix"
+        [[ -n "$new_prefix" ]] && new_prefix="${new_prefix},"
+        new_prefix="${new_prefix}${key}=${v}"
+        _generate_combinations "$new_prefix" $((depth + 1))
+    done
+}
+
+# 从 combo 字符串提取变体名 (仅值部分)
+_combo_to_variant() {
+    local combo="$1"
+    local variant=""
+    IFS=',' read -ra parts <<< "$combo"
+    for part in "${parts[@]}"; do
+        local val="${part#*=}"
+        [[ -n "$variant" ]] && variant="${variant}-"
+        variant="${variant}${val}"
+    done
+    echo "$variant"
 }
 
 # -----------------------------------------------------------------------------
@@ -2789,27 +3194,27 @@ cmd_clean() {
     local target="${1:-}"
 
     if [[ -z "$target" ]]; then
-        die "用法: ez clean <name> | --all | --logs | --workspace"
+        die "Usage: ez clean <name> | --all | --logs | --workspace"
     fi
 
     case "$target" in
         --all)
-            rm -rf "$EZ_DIR"
-            echo -e "${GREEN}✓ Cleaned: .ez/ (all runtime data)${NC}"
+            rm -rf "$EZ_DIR" "$EZ_WORKSPACE_DIR"
+            echo -e "${GREEN}✓ Cleaned: .ez/ + workspace/ (all runtime data)${NC}"
             ;;
         --logs)
-            rm -rf "$EZ_DIR"/tasks/*/logs "$EZ_DIR"/plans/*/logs "$EZ_LOG_DIR"
+            rm -rf "$EZ_WORKSPACE_DIR"/*/logs "$EZ_DIR"/plans/*/logs "$EZ_LOG_DIR"
             echo -e "${GREEN}✓ Cleaned: all logs${NC}"
             ;;
         --workspace)
-            rm -rf "$EZ_DIR"/tasks/*/workspace "$EZ_WORKSPACE_DIR"
+            rm -rf "$EZ_WORKSPACE_DIR"
             echo -e "${GREEN}✓ Cleaned: all workspaces${NC}"
             ;;
         *)
-            # 尝试清理 task 或 plan
-            if [[ -d "$EZ_DIR/tasks/$target" ]]; then
-                rm -rf "$EZ_DIR/tasks/$target"
-                echo -e "${GREEN}✓ Cleaned: .ez/tasks/$target/${NC}"
+            # Try cleaning workspace, then plan state
+            if [[ -d "$EZ_WORKSPACE_DIR/$target" ]]; then
+                rm -rf "$EZ_WORKSPACE_DIR/$target"
+                echo -e "${GREEN}✓ Cleaned: workspace/$target/${NC}"
             elif [[ -d "$EZ_DIR/plans/$target" ]]; then
                 rm -rf "$EZ_DIR/plans/$target"
                 echo -e "${GREEN}✓ Cleaned: .ez/plans/$target/${NC}"
@@ -2844,6 +3249,9 @@ main() {
         template|tpl) cmd_template "$@" ;;
         plugin)       cmd_plugin "$@" ;;
         log)          cmd_log "$@" ;;
+        rerun)        cmd_rerun "$@" ;;
+        ws)           cmd_ws "$@" ;;
+        matrix)       cmd_matrix "$@" ;;
         server)       cmd_server "$@" ;;
         client)       cmd_client "$@" ;;
         version|-v|--version)   cmd_version ;;

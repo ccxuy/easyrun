@@ -1,0 +1,81 @@
+# Rerun 迭代工作流测试 (v2.0)
+version: '3'
+
+tasks:
+  all:
+    desc: "运行所有 Rerun 测试"
+    cmds:
+      - task: run-context-saved
+      - task: rerun-basic
+      - task: rerun-override
+      - task: rerun-latest
+      - task: ws-list
+      - task: ws-show
+      - task: ws-clean
+      - task: cleanup
+      - cmd: echo "✓ 18-rerun 全部通过"
+
+  run-context-saved:
+    desc: "测试运行后保存上下文 (使用目录任务)"
+    cmds:
+      # 创建测试目录任务
+      - cmd: ./ez new rerun-task
+      # 运行（默认在 workspace 中执行）
+      - cmd: ./ez rerun-task EZ_NAME=World --log 2>/dev/null || true
+      # 验证上下文已保存
+      - cmd: test -f workspace/rerun-task/.ez-run.yml
+      - cmd: ./dep/yq eval '.task' workspace/rerun-task/.ez-run.yml | grep -q "rerun-task"
+      - cmd: echo "✓ run context saved OK"
+
+  rerun-basic:
+    desc: "测试 rerun 基础功能"
+    cmds:
+      - cmd: ./ez rerun rerun-task 2>&1 | grep -q "Rerun:"
+      - cmd: echo "✓ rerun basic OK"
+
+  rerun-override:
+    desc: "测试 rerun 覆盖参数"
+    cmds:
+      # Run rerun with override (capture to avoid SIGPIPE killing the process)
+      - cmd: output=$(./ez rerun rerun-task EZ_NAME=Override 2>&1); echo "$output" | grep -q "Rerun:"
+      - cmd: ./dep/yq eval '.params.EZ_NAME' workspace/rerun-task/.ez-run.yml | grep -q "Override"
+      - cmd: echo "✓ rerun override OK"
+
+  rerun-latest:
+    desc: "测试 rerun 无参数（最近工作区）"
+    cmds:
+      - cmd: ./ez rerun 2>&1 | grep -q "Rerun:"
+      - cmd: echo "✓ rerun latest OK"
+
+  ws-list:
+    desc: "测试 ez ws 列出工作区"
+    cmds:
+      - cmd: ./ez ws | grep -q "rerun-task"
+      - cmd: ./ez ws | grep -q "Workspaces:"
+      - cmd: echo "✓ ws list OK"
+
+  ws-show:
+    desc: "测试 ez ws <name> 显示详情"
+    cmds:
+      - cmd: ./ez ws rerun-task | grep -q "Workspace:"
+      - cmd: ./ez ws rerun-task | grep -q "Task:"
+      - cmd: ./ez ws rerun-task | grep -q "Exit:"
+      - cmd: echo "✓ ws show OK"
+
+  ws-clean:
+    desc: "测试 ez ws clean"
+    cmds:
+      - cmd: ./ez new ws-clean-task 2>/dev/null || true
+      - cmd: ./ez ws-clean-task 2>/dev/null || true
+      - cmd: test -d workspace/ws-clean-task
+      - cmd: ./ez ws clean ws-clean-task | grep -q "Cleaned"
+      - cmd: test ! -d workspace/ws-clean-task
+      # 清理
+      - cmd: rm -rf tasks/ws-clean-task
+      - cmd: echo "✓ ws clean OK"
+
+  cleanup:
+    desc: "清理测试工作区"
+    cmds:
+      - cmd: rm -rf workspace/rerun-task tasks/rerun-task
+      - cmd: echo "✓ cleanup OK"

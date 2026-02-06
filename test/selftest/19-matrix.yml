@@ -1,0 +1,45 @@
+# Matrix 多变体并行测试 (v2.0)
+version: '3'
+
+tasks:
+  all:
+    desc: "运行所有 Matrix 测试"
+    cmds:
+      - task: matrix-dry-run
+      - task: matrix-single-vary
+      - task: matrix-with-fixed
+      - task: cleanup
+      - cmd: echo "✓ 19-matrix 全部通过"
+
+  matrix-dry-run:
+    desc: "测试 matrix dry-run"
+    cmds:
+      - cmd: ./ez matrix hello --vary EZ_NAME=A,B,C --dry-run 2>&1 | grep -q "3 variants"
+      - cmd: ./ez matrix hello --vary EZ_NAME=A,B --vary EZ_MODE=x,y --dry-run 2>&1 | grep -q "4 variants"
+      - cmd: echo "✓ matrix dry-run OK"
+
+  matrix-single-vary:
+    desc: "测试 matrix 单维度并行"
+    cmds:
+      # 创建测试目录任务
+      - cmd: ./ez new matrix-task 2>/dev/null || true
+      # 运行 matrix
+      - cmd: ./ez matrix matrix-task --vary EZ_ARCH=x86,arm 2>&1 | grep -q "Matrix Results:"
+      # 验证每个变体的工作区
+      - cmd: test -d workspace/matrix-task--x86
+      - cmd: test -d workspace/matrix-task--arm
+      - cmd: echo "✓ matrix single-vary OK"
+
+  matrix-with-fixed:
+    desc: "测试 matrix 固定参数"
+    cmds:
+      - cmd: ./ez matrix matrix-task --vary EZ_ARCH=riscv EZ_JOBS=8 2>&1 | grep -q "Matrix Results:"
+      - cmd: test -d workspace/matrix-task--riscv
+      - cmd: echo "✓ matrix with-fixed OK"
+
+  cleanup:
+    desc: "清理测试工作区"
+    cmds:
+      - cmd: rm -rf tasks/matrix-task
+      - cmd: rm -rf workspace/matrix-task--x86 workspace/matrix-task--arm workspace/matrix-task--riscv
+      - cmd: echo "✓ cleanup OK"

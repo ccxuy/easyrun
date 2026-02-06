@@ -6,7 +6,7 @@
 
 # 获取 EZ 根目录
 EZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EZ_VERSION="1.5.0-beta"
+EZ_VERSION="2.0.0-beta"
 
 # 本地二进制路径
 YQ="$EZ_ROOT/dep/yq"
@@ -14,29 +14,30 @@ TASK="$EZ_ROOT/dep/task"
 YTT="$EZ_ROOT/dep/ytt"
 
 # -----------------------------------------------------------------------------
-# 核心术语 (详见 DESIGN.md)
+# Core terminology (see DESIGN.md)
 # -----------------------------------------------------------------------------
-# Task      任务    EZ 的核心单元，go-task task 的超集
-#   - 行内任务: 定义在根 Taskfile.yml 中
-#   - 文件夹任务: tasks/<name>/ 自包含目录，含 Taskfile.yml + task.yml
-# Plan      计划    多 Task 的编排，可编译为 Taskfile
-# Step      步骤    Plan 内的单个环节
-# Artifact  产物    Task 的输出文件，可被下游 Task 引用
-# Workspace 工作区  隔离的执行目录，防止污染源码
+# Task      EZ core unit, superset of go-task task
+#   - inline task: defined in root Taskfile.yml
+#   - dir task: tasks/<name>/ self-contained directory with Taskfile.yml + task.yml
+# Plan      Multi-task orchestration, compiles to Taskfile
+# Step      Single step within a Plan
+# Artifact  Task output file, can be referenced by downstream tasks
+# Workspace Isolated execution directory, prevents source pollution
 #
-# 生命周期: pending → running → success / failed
+# Lifecycle: pending → running → success / failed
 
 # -----------------------------------------------------------------------------
-# 目录常量
+# Directory constants
 # -----------------------------------------------------------------------------
-# .ez/ 统一运行时目录（v1.4: 按粒度组织）
+# .ez/ internal state only (v2.0: slimmed down)
 EZ_DIR="$EZ_ROOT/.ez"
-EZ_WORKSPACE_DIR="$EZ_DIR/workspace"
 EZ_STATE_DIR="$EZ_DIR/state"
 EZ_LOG_DIR="$EZ_DIR/logs"
-EZ_ARTIFACTS_DIR="$EZ_DIR/artifacts"
 
-# tasks/ 文件夹任务目录
+# workspace/ at project root (v2.0: user-accessible)
+EZ_WORKSPACE_DIR="$EZ_ROOT/workspace"
+
+# tasks/ directory-organized tasks
 EZ_TASKS_DIR="$EZ_ROOT/tasks"
 
 # plans/ 计划目录
@@ -65,18 +66,19 @@ init_log_dir() {
 }
 
 # 生成日志文件路径
-# 格式: .ez/tasks/<name>/logs/YYYYMMDD-HHMMSS_<task>_<run_id>.log (文件夹任务模式)
-#    或: .ez/logs/YYYYMMDD-HHMMSS_<task>_<run_id>.log (全局模式)
+# 格式: workspace/<name>/logs/YYYYMMDD-HHMMSS_<task>_<run_id>.log (workspace mode)
+#    或: .ez/logs/YYYYMMDD-HHMMSS_<task>_<run_id>.log (global mode)
 get_log_path() {
     local task_name="$1"
     local run_id="${2:-$(date +%s)}"
-    local folder_name="${3:-}"  # 可选: 关联的文件夹任务名称
+    local ws_name="${3:-}"  # optional: workspace name for workspace-local logs
     local timestamp=$(date +%Y%m%d-%H%M%S)
     local safe_name=$(echo "$task_name" | tr '/:' '_')
 
     local log_dir
-    if [[ -n "$folder_name" ]]; then
-        log_dir=$(get_task_log_dir "$folder_name")
+    if [[ -n "$ws_name" ]]; then
+        log_dir="$EZ_WORKSPACE_DIR/$ws_name/logs"
+        mkdir -p "$log_dir"
     else
         log_dir="$EZ_LOG_DIR"
         mkdir -p "$log_dir"
@@ -251,7 +253,7 @@ find_taskfile() {
     return 1
 }
 
-# 检查任务是否存在（根 Taskfile 或 tasks/ 文件夹）
+# 检查任务是否存在（根 Taskfile 或 tasks/ 目录）
 # 参数: $1 = Taskfile 路径, $2 = 任务名
 # 返回: 0 = 存在, 1 = 不存在
 task_exists() {
@@ -265,25 +267,25 @@ task_exists() {
         return 0
     fi
 
-    # 2. 检查 tasks/ 文件夹任务
-    if is_folder_task "$task"; then
+    # 2. 检查 tasks/ 目录任务
+    if is_dir_task "$task"; then
         return 0
     fi
 
     return 1
 }
 
-# 检查是否是文件夹任务 (tasks/ 目录下的子文件夹)
+# 检查是否是目录任务 (tasks/ 目录下的子目录)
 # 参数: $1 = 名称
-# 返回: 0 = 是文件夹任务, 1 = 不是
-is_folder_task() {
+# 返回: 0 = 是目录任务, 1 = 不是
+is_dir_task() {
     local name="$1"
     [[ -d "$EZ_TASKS_DIR/$name" && -f "$EZ_TASKS_DIR/$name/Taskfile.yml" ]]
 }
 
-# 发现所有任务：根 Taskfile + tasks/ 子文件夹
+# 发现所有任务：根 Taskfile + tasks/ 子目录
 # 参数: $1 = 根目录 (可选, 默认 ".")
-# 输出: 每行一个任务名，文件夹任务后缀 \t[folder]
+# 输出: 每行一个任务名，目录任务后缀 \t[dir]
 discover_tasks() {
     local root="${1:-.}"
 
@@ -295,21 +297,21 @@ discover_tasks() {
         done < <(get_tasks "$taskfile")
     fi
 
-    # 2. tasks/ 目录中的文件夹任务
+    # 2. tasks/ 目录中的目录任务
     if [[ -d "$EZ_TASKS_DIR" ]]; then
         for dir in "$EZ_TASKS_DIR"/*/; do
             [[ ! -d "$dir" ]] && continue
             if [[ -f "$dir/Taskfile.yml" || -f "$dir/Taskfile.yaml" ]]; then
                 local name
                 name=$(basename "$dir")
-                echo "${name}\t[folder]"
+                echo "${name}\t[dir]"
             fi
         done
     fi
 }
 
-# 获取文件夹任务列表（仅返回名称）
-get_folder_tasks() {
+# 获取目录任务列表（仅返回名称）
+get_dir_tasks() {
     if [[ -d "$EZ_TASKS_DIR" ]]; then
         for dir in "$EZ_TASKS_DIR"/*/; do
             [[ ! -d "$dir" ]] && continue
@@ -321,35 +323,14 @@ get_folder_tasks() {
 }
 
 # -----------------------------------------------------------------------------
-# 按粒度组织的目录 (v1.4)
+# Workspace-aware directories (v2.0)
 # -----------------------------------------------------------------------------
 
-# 获取文件夹任务的运行时目录
-# 参数: $1 = 任务名称
-# 返回: .ez/tasks/<name>/
-get_task_runtime_dir() {
-    local name="$1"
-    echo "$EZ_DIR/tasks/$name"
-}
-
-# 获取文件夹任务的日志目录
-get_task_log_dir() {
-    local name="$1"
-    local dir="$EZ_DIR/tasks/$name/logs"
-    mkdir -p "$dir"
-    echo "$dir"
-}
-
-# 获取文件夹任务的 workspace 目录
-get_task_workspace_dir() {
-    local name="$1"
-    echo "$EZ_DIR/tasks/$name/workspace"
-}
-
-# 获取文件夹任务的产物目录
-get_task_artifacts_dir() {
-    local name="$1"
-    local dir="$EZ_DIR/tasks/$name/artifacts"
+# 获取 workspace 的日志目录
+# 参数: $1 = workspace 名称
+get_workspace_log_dir() {
+    local ws_name="$1"
+    local dir="$EZ_WORKSPACE_DIR/$ws_name/logs"
     mkdir -p "$dir"
     echo "$dir"
 }
@@ -386,13 +367,13 @@ ez_clean() {
 
     case "$type" in
         task)
-            rm -rf "$EZ_DIR/tasks/$name"
+            rm -rf "$EZ_WORKSPACE_DIR/$name"
             ;;
         plan)
             rm -rf "$EZ_DIR/plans/$name"
             ;;
         all)
-            rm -rf "$EZ_DIR"
+            rm -rf "$EZ_DIR" "$EZ_WORKSPACE_DIR"
             ;;
     esac
 }
@@ -715,14 +696,13 @@ get_ez_inputs_json() {
 # 初始化产物目录
 init_artifacts_dir() {
     local run_id="${1:-$(date +%Y%m%d-%H%M%S)}"
-    local folder_name="${2:-}"  # 可选: 关联的文件夹任务名称
+    local ws_name="${2:-}"  # optional: workspace name
 
     local artifact_dir
-    if [[ -n "$folder_name" ]]; then
-        artifact_dir=$(get_task_artifacts_dir "$folder_name")
-        artifact_dir="$artifact_dir/$run_id"
+    if [[ -n "$ws_name" ]]; then
+        artifact_dir="$EZ_WORKSPACE_DIR/$ws_name/artifacts/$run_id"
     else
-        artifact_dir="$EZ_ARTIFACTS_DIR/$run_id"
+        artifact_dir="$EZ_DIR/artifacts/$run_id"
     fi
     mkdir -p "$artifact_dir"
     echo "$artifact_dir"
@@ -828,31 +808,23 @@ get_task_relations() {
 }
 
 # -----------------------------------------------------------------------------
-# Workspace 工作区管理 (v1.3 → v1.4)
+# Workspace management (v2.0: project root)
 # -----------------------------------------------------------------------------
 
 # 创建工作区
 # 参数: $1 = 工作区名称 (或 "auto" 自动生成)
-#        $2 = 关联文件夹任务名称 (可选; 如提供，创建到 .ez/tasks/<name>/workspace/)
 # 输出: 工作区路径
 # 返回: 0 = 成功, 1 = 失败
 create_workspace() {
     local name="$1"
-    local folder_name="${2:-}"
 
     # auto 模式: 生成唯一名称
     if [[ "$name" == "auto" ]]; then
         name="$(date +%Y%m%d-%H%M%S)-$$"
     fi
 
-    local ws_dir
-    if [[ -n "$folder_name" ]]; then
-        # 文件夹任务默认 workspace: .ez/tasks/<name>/workspace/
-        ws_dir="$(get_task_workspace_dir "$folder_name")"
-    else
-        # Ad-hoc workspace: .ez/workspace/<name>/
-        ws_dir="$EZ_WORKSPACE_DIR/$name"
-    fi
+    # All workspaces go to workspace/ at project root
+    local ws_dir="$EZ_WORKSPACE_DIR/$name"
 
     if [[ -d "$ws_dir" ]]; then
         echo "$ws_dir"
@@ -870,7 +842,70 @@ create_workspace() {
         cp "$taskfile" "$ws_dir/Taskfile.yml"
     fi
 
+    # 创建 workspace-local logs 目录
+    mkdir -p "$ws_dir/logs"
+
     echo "$ws_dir"
+}
+
+# 保存运行上下文到工作区
+# 用于 rerun 重复执行
+save_run_context() {
+    local ws_dir="$1" task_name="$2" exit_code="${3:-0}" duration="${4:-0}"
+    shift 4 || true
+    local -a params=("$@")
+
+    local ctx_file="$ws_dir/.ez-run.yml"
+    {
+        echo "version: 1"
+        echo "task: $task_name"
+        echo "timestamp: \"$(date -Iseconds)\""
+        echo "exit_code: $exit_code"
+        echo "duration: $duration"
+        if [[ ${#params[@]} -gt 0 ]]; then
+            echo "params:"
+            for p in "${params[@]}"; do
+                local key="${p%%=*}"
+                local val="${p#*=}"
+                echo "  $key: \"$val\""
+            done
+        fi
+    } > "$ctx_file"
+}
+
+# 保存 plan 运行上下文
+save_plan_run_context() {
+    local ws_dir="$1" plan_name="$2" exit_code="${3:-0}" duration="${4:-0}"
+    shift 4 || true
+    local -a params=("$@")
+
+    local ctx_file="$ws_dir/.ez-run.yml"
+    {
+        echo "version: 1"
+        echo "plan: $plan_name"
+        echo "timestamp: \"$(date -Iseconds)\""
+        echo "exit_code: $exit_code"
+        echo "duration: $duration"
+        if [[ ${#params[@]} -gt 0 ]]; then
+            echo "params:"
+            for p in "${params[@]}"; do
+                local key="${p%%=*}"
+                local val="${p#*=}"
+                echo "  $key: \"$val\""
+            done
+        fi
+    } > "$ctx_file"
+}
+
+# 加载运行上下文
+# 返回: task/plan 名称和参数列表
+load_run_context() {
+    local ws_dir="$1"
+    local ctx_file="$ws_dir/.ez-run.yml"
+
+    [[ -f "$ctx_file" ]] || return 1
+
+    echo "$ctx_file"
 }
 
 # 列出所有工作区
@@ -882,9 +917,17 @@ list_workspaces() {
         [[ ! -d "$dir" ]] && continue
         local name
         name=$(basename "$dir")
-        local created
+        local created info=""
         created=$(stat -c %y "$dir" 2>/dev/null | cut -d. -f1)
-        echo "$name $created"
+        # Show run context if available
+        if [[ -f "$dir/.ez-run.yml" ]]; then
+            local task plan
+            task=$("$YQ" eval '.task // ""' "$dir/.ez-run.yml" 2>/dev/null)
+            plan=$("$YQ" eval '.plan // ""' "$dir/.ez-run.yml" 2>/dev/null)
+            [[ -n "$task" && "$task" != "null" ]] && info="task:$task"
+            [[ -n "$plan" && "$plan" != "null" ]] && info="plan:$plan"
+        fi
+        echo "$name $info $created"
     done
 }
 

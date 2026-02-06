@@ -1,4 +1,4 @@
-# Workspace 隔离执行测试 (v1.4)
+# Workspace 隔离执行测试 (v2.0)
 version: '3'
 
 tasks:
@@ -9,7 +9,7 @@ tasks:
       - task: workspace-named
       - task: workspace-dry-run
       - task: folder-task-workspace
-      - task: ez-dir-structure
+      - task: workspace-dir-structure
       - task: cleanup
       - cmd: echo "✓ 17-workspace 全部通过"
 
@@ -17,54 +17,52 @@ tasks:
     desc: "测试 --workspace=auto 自动命名"
     cmds:
       - cmd: ./ez hello --workspace=auto | grep -q "Workspace:"
-      - cmd: test -d .ez/workspace
-      - cmd: "ls .ez/workspace/ | head -1 | grep -qE '^[0-9]{8}-[0-9]{6}-'"
+      - cmd: test -d workspace
+      - cmd: "ls workspace/ | head -1 | grep -qE '^[0-9]{8}-[0-9]{6}-'"
       - cmd: echo "✓ workspace auto OK"
 
   workspace-named:
     desc: "测试 --workspace=mytest 指定名称"
     cmds:
       - cmd: ./ez hello --workspace=mytest | grep -q "Workspace:"
-      - cmd: test -d .ez/workspace/mytest
-      - cmd: test -L .ez/workspace/mytest/src
-      - cmd: test -f .ez/workspace/mytest/Taskfile.yml
+      - cmd: test -d workspace/mytest
+      - cmd: test -L workspace/mytest/src
+      - cmd: test -f workspace/mytest/Taskfile.yml
       - cmd: echo "✓ workspace named OK"
 
   workspace-dry-run:
     desc: "测试 workspace + dry-run"
     cmds:
       - cmd: ./ez hello --workspace=drytest --dry-run | grep -q "Dry run"
-      - cmd: test -d .ez/workspace/drytest
+      - cmd: test -d workspace/drytest
       - cmd: echo "✓ workspace dry-run OK"
 
   folder-task-workspace:
-    desc: "测试文件夹任务默认 workspace 执行"
+    desc: "测试目录任务默认 workspace 执行"
     cmds:
-      # 创建测试文件夹任务
+      # 创建测试目录任务
       - cmd: ./ez new ws-test-task
       # 默认执行（在 workspace 中）
       - cmd: ./ez ws-test-task | grep -q "Task:"
-      - cmd: test -d .ez/tasks/ws-test-task/workspace
+      - cmd: test -d workspace/ws-test-task
       # --no-workspace 直接执行
-      - cmd: ./ez ws-test-task --no-workspace | grep -q "[folder]"
+      - cmd: ./ez ws-test-task --no-workspace | grep -q "TODO"
       # 清理
-      - cmd: rm -rf tasks/ws-test-task .ez/tasks/ws-test-task
-      - cmd: echo "✓ folder-task workspace OK"
+      - cmd: rm -rf tasks/ws-test-task workspace/ws-test-task
+      - cmd: echo "✓ dir-task workspace OK"
 
-  ez-dir-structure:
-    desc: "测试 .ez/ 按粒度目录结构"
+  workspace-dir-structure:
+    desc: "测试 workspace/ 在项目根目录"
     cmds:
-      # .ez/ 根目录应存在
-      - cmd: test -d .ez
-      # workspace 子目录应存在（前面的测试已创建）
-      - cmd: test -d .ez/workspace
-      - cmd: echo "✓ .ez/ dir structure OK"
+      # workspace/ 根目录应存在（前面的测试已创建）
+      - cmd: test -d workspace
+      - cmd: echo "✓ workspace dir structure OK"
 
   cleanup:
     desc: "清理测试工作区"
     cmds:
-      - cmd: rm -rf .ez/workspace/mytest
-      - cmd: rm -rf .ez/workspace/drytest
+      - cmd: rm -rf workspace/mytest
+      - cmd: rm -rf workspace/drytest
       # 清理 auto 工作区（匹配日期模式）
-      - cmd: 'find .ez/workspace/ -maxdepth 1 -type d -name "20*" -exec rm -rf {} + 2>/dev/null || true'
+      - cmd: 'find workspace/ -maxdepth 1 -type d -name "20*" -exec rm -rf {} + 2>/dev/null || true'
       - cmd: echo "✓ cleanup OK"
