@@ -4,12 +4,14 @@ EZ 是 go-task 的超集前端。go-task 是执行引擎，EZ 在其上提供参
 
 ## 设计原则
 
-1. **超集不替代** — EZ 扩展 go-task，不替换。所有 `ez-*` 字段可被 go-task 安全忽略，EZ 生成的 Taskfile 是合法 go-task 文件。
-2. **Task 是核心** — EZ 的 task 是 go-task task 的超集：行内任务定义在根 Taskfile.yml，文件夹任务是 `tasks/` 下的自包含目录。
-3. **Workspace 默认隔离** — 文件夹任务默认在隔离工作区中执行，防止污染源码。`--no-workspace` 关闭隔离。
-4. **按粒度组织运行时** — `.ez/` 按任务/计划名称组织子目录，`rm -rf .ez/tasks/X` 即可清理单个任务的全部运行时数据。
-5. **根目录整洁** — 项目根只放核心文件（`ez`、`Taskfile.yml`），运行时和生成物统一收归 `.ez/`。
-6. **渐进增强** — 从简单的 `ez <task>` 直接执行开始，按需使用参数、计划、远程执行等高级功能。
+1. **便携适配** — 拷贝即用，适配各种 Linux 执行环境。核心只依赖 Bash + 两个二进制 (go-task, yq)，无需系统级安装。首次运行自动安装依赖，离线环境支持直接拷贝 `dep/` 目录。
+2. **精简核心** — EZ 是任务编排工具。AI 交互、分布式执行（server/client）等是可选扩展接口，不膨胀核心。
+3. **超集不替代** — EZ 扩展 go-task，不替换。所有 `ez-*` 字段可被 go-task 安全忽略，EZ 生成的 Taskfile 是合法 go-task 文件。
+4. **Task 是核心** — EZ 的 task 是 go-task task 的超集：行内任务定义在根 Taskfile.yml，文件夹任务是 `tasks/` 下的自包含目录。
+5. **Workspace 默认隔离** — 文件夹任务默认在隔离工作区中执行，防止污染源码。`--no-workspace` 关闭隔离。
+6. **按粒度组织运行时** — `.ez/` 按任务/计划名称组织子目录，`rm -rf .ez/tasks/X` 即可清理单个任务的全部运行时数据。
+7. **根目录整洁** — 项目根只放核心文件（`ez`、`Taskfile.yml`），运行时和生成物统一收归 `.ez/`。
+8. **渐进增强** — 从简单的 `ez <task>` 直接执行开始，按需使用参数、计划、远程执行等高级功能。
 
 ---
 
@@ -34,7 +36,9 @@ EZ 是 go-task 的超集前端。go-task 是执行引擎，EZ 在其上提供参
 ```
 project/
 ├── ez                        # 主入口（唯一可执行文件）
-├── lib/ez-core.sh            # 核心函数库
+├── lib/
+│   ├── ez-core.sh            # 核心函数库
+│   └── completion/           # Tab 补全脚本
 ├── dep/                      # 依赖二进制 (go-task, yq)
 ├── Taskfile.yml              # 根 Taskfile（行内任务）
 ├── tasks/                    # 文件夹任务（EZ 自动发现）
@@ -55,8 +59,8 @@ project/
 │   │   └── state/            #   恢复状态
 │   └── workspace/            # ad-hoc 工作区（--workspace=name）
 ├── test/selftest/            # 自测试套件
-├── server/                   # Server 组件
-├── client/                   # Client Agent
+├── server/                   # Server + Client（可选，分布式组件）
+│   └── client/               #   Client Agent
 ├── docs/                     # 详细文档
 ├── DESIGN.md                 # 本文件
 ├── PLAN.md                   # 开发计划
@@ -317,46 +321,40 @@ steps:
 
 ## 命令体系
 
-原则：最常用操作最短路径。`ez <name>` 直接执行，无需子命令。
+原则：最常用操作最短路径。`ez <name>` 直接执行，无需子命令。一级菜单聚焦核心功能，扩展功能通过子命令 help 查看。
 
 ```
-# 任务操作（默认主体）
+# 任务执行
 ez                            # 等价于 ez list
 ez <name>                     # 直接执行（行内或文件夹任务）
 ez <name> --dry-run           # 预览不执行
-ez list [filter]              # 列出任务（文件夹任务标记 [folder]）
-ez show <name>                # 显示详情（含 task.yml 元数据）
-ez run <name> [vars]          # 运行任务（交互式参数）
-ez new <name>                 # 创建文件夹任务 tasks/<name>/
-ez check [name]               # 验证 Taskfile 语法
-ez clean <name>               # 清理 .ez/tasks/<name>/ 运行时数据
-ez clean --all                # 清理全部 .ez/
 
-# 导入导出
-ez export <name>              # 导出文件夹任务为 .tar.gz
-ez import <path>              # 导入文件夹任务
+# 任务管理
+ez new <name>                 # 创建文件夹任务 tasks/<name>/
+ez show <name>                # 显示详情（含 task.yml 元数据）
+ez export / import            # 导出/导入文件夹任务
+ez check [name]               # 验证 Taskfile 语法
+ez clean <name|--all>         # 清理运行时数据
 
 # Plan 编排
-ez plan list                  # 列出所有计划
-ez plan new <name>            # 创建 Plan
-ez plan add <name> <task>     # 添加步骤 (--needs 依赖)
-ez plan show <name>           # 查看结构
-ez plan build <name>          # 编译为 Taskfile
-ez plan check <name>          # 验证依赖完备性
-ez plan run <name>            # 编译 + 执行
 ez plan <name>                # 等价于 ez plan run <name>
+ez plan list / new / show / build / check
+                              # 计划管理子命令
 
-# Server/Client 分布式
-ez server start               # 启动 HTTP 服务器
-ez server status              # 查看 Server + 节点状态
-ez server docker              # Docker 方式启动
-ez client start               # 启动 Client Agent
-
-# 辅助
+# 工具
 ez browse                     # 交互式任务导航
-ez version                    # 版本信息
-ez help                       # 帮助
+ez log list / show            # 执行日志
 ez completion bash|zsh        # Tab 补全脚本
+
+# 选项
+--dry-run                     # 预览不执行
+--log                         # 记录日志
+--workspace=<name>            # 隔离执行 (auto = 自动命名)
+--no-workspace                # 源目录执行
+
+# 分布式（可选）
+ez server help                # Server 子命令帮助
+ez client help                # Client 子命令帮助
 ```
 
 ---

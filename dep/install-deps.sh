@@ -7,7 +7,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEP_DIR="$SCRIPT_DIR/dep"
+DEP_DIR="$SCRIPT_DIR"
 
 # 颜色
 RED='\033[0;31m'

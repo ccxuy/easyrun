@@ -6,7 +6,7 @@
 
 # 获取 EZ 根目录
 EZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EZ_VERSION="1.4.0-beta"
+EZ_VERSION="1.5.0-beta"
 
 # 本地二进制路径
 YQ="$EZ_ROOT/dep/yq"
@@ -214,11 +214,23 @@ info() {
 }
 
 # -----------------------------------------------------------------------------
-# 依赖检查
+# 依赖检查与自动安装
 # -----------------------------------------------------------------------------
-check_deps() {
-    [[ -x "$YQ" ]] || die "yq 未找到，请运行: ./dep/install-deps.sh"
-    [[ -x "$TASK" ]] || die "task 未找到，请运行: ./dep/install-deps.sh"
+ensure_deps() {
+    # 已存在则跳过（支持离线环境直接拷贝 dep/ 即用）
+    [[ -x "$YQ" ]] && [[ -x "$TASK" ]] && return 0
+
+    # 尝试自动安装
+    if command -v curl &>/dev/null; then
+        info "首次运行，自动安装依赖..."
+        bash "$EZ_ROOT/dep/install-deps.sh" || die "依赖安装失败，请手动运行: ./dep/install-deps.sh"
+    else
+        die "缺少依赖 (yq/task)，请手动将二进制文件放入 dep/ 目录\n  或安装 curl 后重试"
+    fi
+
+    # 再次检查
+    [[ -x "$YQ" ]] || die "yq 未找到"
+    [[ -x "$TASK" ]] || die "task 未找到"
 }
 
 # -----------------------------------------------------------------------------

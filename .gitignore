@@ -1,6 +1,7 @@
-# 下载的二进制文件 (通过 dep/install-deps.sh 安装)
+# 依赖二进制 (dep/install-deps.sh 安装或手动拷贝)
 dep/task
 dep/yq
+dep/ytt
 
 # EZ 运行时数据
 .ez/
@@ -8,3 +9,6 @@ dep/yq
 .ez-artifacts/
 .ez-state/
 .ez-results/
+
+# 导出产物
+*.tar.gz

@@ -19,7 +19,7 @@ tasks:
       - cmd: test -f ./server/templates/tasks.html
       - cmd: test -f ./server/templates/jobs.html
       - cmd: test -f ./server/static/css/style.css
-      - cmd: test -f ./client/agent.py
+      - cmd: test -f ./server/client/agent.py
       - cmd: test -f ./server/Dockerfile
       - cmd: test -f ./server/docker-compose.yml
       - cmd: echo "✓ server files OK"
@@ -27,8 +27,7 @@ tasks:
   help-commands:
     desc: "检查帮助包含 server/client 命令"
     cmds:
-      - cmd: ./ez help | grep -q "server status"
-      - cmd: ./ez help | grep -q "server docker"
-      - cmd: ./ez help | grep -q "client start"
+      - cmd: ./ez help | grep -q "server help"
+      - cmd: ./ez help | grep -q "client help"
       - cmd: ./ez help | grep -q "分布式"
       - cmd: echo "✓ help commands OK"

@@ -23,7 +23,7 @@ tasks:
     desc: "测试 ez help"
     cmds:
       - cmd: ./ez help | grep -q "go-task"
-      - cmd: ./ez help | grep -q "implicit run"
+      - cmd: ./ez help | grep -q "任务编排"
       - cmd: ./ez help | grep -q "Tab 补全"
       - cmd: ./ez help | grep -q "文件夹任务"
       - cmd: echo "✓ ez help OK"

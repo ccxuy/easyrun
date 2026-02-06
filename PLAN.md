@@ -66,7 +66,7 @@ easyrun/
 ### 核心函数
 | 函数 | 用途 |
 |------|------|
-| `check_deps` | 检查依赖是否存在 |
+| `ensure_deps` | 检查依赖是否存在，不存在则自动安装 |
 | `find_taskfile` | 查找当前目录的 Taskfile |
 | `get_tasks` | 获取所有任务名称列表 |
 | `get_task_prop` | 获取任务的指定属性 |
@@ -358,6 +358,7 @@ Running: ./dep/task -t Taskfile.yml build EZ_ARCH=aarch64
 | v1.2.0 | Plan 编译系统 | ✅ |
 | v1.3.0 | Workspace 隔离 + .ez/ 统一目录 | ✅ |
 | v1.4.0-beta | 文件夹任务体系 + .ez/ 按粒度重组 | ✅ |
+| v1.5.0-beta | 命令精简 + 依赖自动安装 + 目录整洁 | ✅ |
 
 ---
 
@@ -463,6 +464,17 @@ Running: ./dep/task -t Taskfile.yml build EZ_ARCH=aarch64
 
 ---
 
+### v1.5 - 命令精简 + 依赖自动安装 + 目录整洁
+
+| 版本 | 功能 | 说明 | 测试 |
+|------|------|------|------|
+| 1.5.0 | Help 菜单精简 | 4 区块聚焦核心，server/client 收为一行提示 | ✅ |
+| 1.5.1 | 依赖自动安装 | ensure_deps() 首次运行自动安装，支持离线拷贝 | ✅ |
+| 1.5.2 | 目录整洁 | client/ → server/client/，completion/ → lib/completion/ | ✅ |
+| 1.5.3 | 设计原则 | 添加便携适配、精简核心原则到 CLAUDE.md/DESIGN.md | ✅ |
+
+---
+
 ## v1.5+ - 长期规划
 
 ### v1.5 - Server 资产管理 + 自动部署
@@ -528,7 +540,7 @@ Running: ./dep/task -t Taskfile.yml build EZ_ARCH=aarch64
 
 ### 当前状态
 
-**当前版本: 1.4.0-beta**
+**当前版本: 1.5.0-beta**
 
 已实现:
 - ✅ Task 任务系统 (ez-params, ez-hooks)
@@ -551,9 +563,12 @@ Running: ./dep/task -t Taskfile.yml build EZ_ARCH=aarch64
 - ✅ **文件夹任务** (tasks/ 目录, task.yml 元数据, 默认 workspace)
 - ✅ **按粒度 .ez/** (.ez/tasks/<name>/, .ez/plans/<name>/)
 - ✅ **任务管理** (ez export/import, ez clean)
+- ✅ **命令精简** (Help 4 区块聚焦核心, server/client 收纳)
+- ✅ **依赖自动安装** (ensure_deps, 首次运行自动安装, 离线拷贝)
+- ✅ **目录整洁** (client/ → server/client/, completion/ → lib/completion/)
 
 待实现:
-- v1.5: Server 资产管理 + 自动部署
+- v1.5+: Server 资产管理 + 自动部署
 - P2/P3: validation 参数验证、query 缓存、Makefile 发现
 
 ---

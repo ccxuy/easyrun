@@ -20,7 +20,7 @@ tasks:
   check-deps:
     desc: "测试依赖检查"
     cmds:
-      - cmd: bash -c 'source lib/ez-core.sh && check_deps && echo "✓ check_deps OK"'
+      - cmd: bash -c 'source lib/ez-core.sh && ensure_deps && echo "✓ ensure_deps OK"'
 
   find-taskfile:
     desc: "测试查找 Taskfile"

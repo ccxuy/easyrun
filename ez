@@ -24,77 +24,42 @@ cmd_version() {
 # -----------------------------------------------------------------------------
 cmd_help() {
     cat << 'EOF'
-EZ - go-task 智能前端
+EZ - go-task 任务编排前端
 
-用法:
-    ez                      列出任务 (等价于 ez list)
-    ez <name>               直接执行 (等价于 ez run <name>)
-    ez <command> [options]
+用法: ez [命令] [选项]
 
-核心命令:
-    <name> [KEY=val]    直接执行 (implicit run)
-    list [keyword]      列出任务 (支持搜索过滤, -a 全部, -f 平铺)
-    show <name>         显示详情 (含 task.yml 元数据)
-    run <name>          运行 (交互式参数)
-    browse [keyword]    交互式浏览器 (↑↓导航)
-    new <name>          创建文件夹任务 (tasks/<name>/)
-    check [name]        验证语法和依赖完整性
-    clean <name>        清理运行时数据 (--all 全部)
+任务执行:
+    ez                    列出所有任务
+    ez <name>             执行任务 (= ez run <name>)
+    ez <name> --dry-run   预览命令
 
 任务管理:
-    export <name>     导出文件夹任务为 .tar.gz
-    import <path>     导入文件夹任务
+    new <name>            创建文件夹任务 (tasks/<name>/)
+    show <name>           查看任务详情和参数
+    export / import       导出/导入文件夹任务
+    check [name]          验证语法
+    clean <name|--all>    清理运行时数据
 
+计划编排:
+    plan <name>           执行计划 (= plan run <name>)
+    plan list / new / show / build / check
+                          计划管理子命令
 
-
-计划命令:
-    plan                列出所有计划
-    plan new <name>     创建计划
-    plan add <name> <task>  向计划添加步骤
-    plan show <plan>    显示计划结构
-    plan build <name>   编译为可执行 Taskfile
-    plan check <name>   验证依赖完备性
-    plan run <plan>     编译并执行计划
-    plan <name>         直接执行计划 (implicit run)
-
-扩展命令:
-    template list       列出可用模板
-    template use <tpl>  使用模板生成任务
-    plugin list         列出已安装插件
-    log list            列出最近日志
-    log show <pattern>  显示日志内容
-    completion bash     输出 Bash Tab 补全脚本
-    completion zsh      输出 Zsh Tab 补全脚本
-
-分布式 (可选):
-    server status       检查分布式功能状态
-    server start [port] 启动 Web 服务器
-    server docker up    使用 Docker 启动服务器
-    client start <url>  启动客户端代理
+工具:
+    browse                交互式任务浏览
+    log list / show       执行日志
+    completion bash|zsh   Tab 补全
 
 选项:
-    --dry-run           只显示命令，不执行
-    --log               记录执行日志
-    --node=<node>       在指定远程节点执行
-    --workspace=<name>  在隔离工作区执行 (auto 自动命名)
-    --no-workspace      跳过默认 workspace，在源目录执行
-    --resume            恢复中断的计划
+    --dry-run             预览不执行
+    --log                 记录日志
+    --workspace=<name>    隔离执行 (auto = 自动命名)
+    --no-workspace        源目录执行
 
-示例:
-    ez                          # 列出所有任务
-    ez hello                    # 直接执行 hello 任务
-    ez hello EZ_NAME=World      # 带参数执行
-    ez list kernel              # 搜索含 kernel 的任务
-    ez show build               # 查看详情
-    ez new my-task              # 创建 tasks/my-task/
-    ez check                    # 验证所有任务
-    ez plan run kernel-ci       # 执行计划
-    ez clean my-task            # 清理运行时数据
-    ez export my-task          # 导出文件夹任务
+ez version              版本信息
+ez help                 本帮助
 
-Tab 补全:
-    eval "$(ez completion bash)"    # Bash
-    eval "$(ez completion zsh)"     # Zsh
+分布式 (可选): ez server help / ez client help
 EOF
 }
 
@@ -2681,7 +2646,7 @@ cmd_client_start() {
     export EZ_SERVER_URL="$server_url"
     export EZ_NODE_NAME="$node_name"
 
-    python3 "$EZ_ROOT/client/agent.py" --server="$server_url" --name="$node_name"
+    python3 "$EZ_ROOT/server/client/agent.py" --server="$server_url" --name="$node_name"
 }
 
 # client 命令路由
@@ -2806,7 +2771,7 @@ cmd_clean() {
 # 主入口
 # -----------------------------------------------------------------------------
 main() {
-    check_deps
+    ensure_deps
 
     local cmd="${1:-list}"  # 无参数默认 list
     shift || true

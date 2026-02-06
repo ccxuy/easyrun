@@ -2,7 +2,7 @@
 
 EZ 是 [go-task](https://github.com/go-task/task) 的超集前端，专注于参数管理、任务编排和工作区隔离。go-task 是执行引擎，EZ 在其上提供智能层。
 
-**当前版本: 1.4.0-beta** (beta 阶段，不保证向后兼容)
+**当前版本: 1.5.0-beta** (beta 阶段，不保证向后兼容)
 
 ## 核心概念
 
@@ -74,8 +74,10 @@ ez plan <name>            等价于 ez plan run <name>
 ```
 easyrun/
 ├── ez                    # 主入口脚本
-├── lib/ez-core.sh        # 核心函数库
-├── dep/                  # 依赖二进制 (go-task, yq)
+├── lib/
+│   ├── ez-core.sh        # 核心函数库
+│   └── completion/       # Tab 补全脚本
+├── dep/                  # 依赖二进制 (首次运行自动安装)
 ├── tasks/                # 文件夹任务
 ├── plans/                # Plan 定义
 ├── Taskfile.yml          # 根 Taskfile（行内任务）
@@ -83,6 +85,7 @@ easyrun/
 │   ├── tasks/<name>/     #   workspace / logs / artifacts
 │   └── plans/<name>/     #   build / logs / state
 ├── test/selftest/        # 自测试套件 (17 组)
+├── server/               # Server + Client（可选）
 └── DESIGN.md             # 设计规格
 ```
 
