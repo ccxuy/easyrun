@@ -2,7 +2,7 @@ version: '3'
 
 includes:
   selftest:
-    taskfile: ./task/selftest/Taskfile.yml
+    taskfile: ./test/selftest/Taskfile.yml
     dir: .
 
 tasks:
