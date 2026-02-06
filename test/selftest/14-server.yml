@@ -10,6 +10,7 @@ tasks:
       - task: server-help
       - task: docker-proxy
       - task: certs-dir
+      - task: chart-files
       - cmd: echo "✓ 14-server 全部通过"
 
   server-files:
@@ -58,3 +59,11 @@ tasks:
     cmds:
       - cmd: test -d ./server/certs
       - cmd: echo "✓ certs dir OK"
+
+  chart-files:
+    desc: "检查可视化文件"
+    cmds:
+      - cmd: test -f ./server/templates/charts.html
+      - cmd: grep -q "chart.min.js" ./server/templates/charts.html
+      - cmd: grep -q "formula-editor" ./server/templates/charts.html
+      - cmd: echo "✓ chart files OK"

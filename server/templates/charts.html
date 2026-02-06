@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Charts - EZ Dashboard</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="/static/js/chart.min.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">EZ Dashboard</div>
+        <div class="nav-links">
+            <a href="/">Overview</a>
+            <a href="/nodes">Nodes</a>
+            <a href="/tasks">Tasks</a>
+            <a href="/jobs">Jobs</a>
+            <a href="/charts" class="active">Charts</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="page-header">
+            <h1>Charts</h1>
+            <p>Data visualization &amp; custom formulas</p>
+        </div>
+
+        <!-- 内置概览图表 -->
+        <div class="charts-grid">
+            <div class="card">
+                <h2>Success Rate</h2>
+                <canvas id="chart-status"></canvas>
+            </div>
+            <div class="card">
+                <h2>Timeline</h2>
+                <canvas id="chart-timeline"></canvas>
+            </div>
+            <div class="card">
+                <h2>By Task</h2>
+                <canvas id="chart-tasks"></canvas>
+            </div>
+            <div class="card">
+                <h2>By Node</h2>
+                <canvas id="chart-nodes"></canvas>
+            </div>
+        </div>
+
+        <!-- 自定义图表编辑器 -->
+        <div class="card editor-card">
+            <h2>Custom Chart</h2>
+            <div class="editor-layout">
+                <div class="editor-left">
+                    <div class="editor-toolbar">
+                        <div class="form-group-inline">
+                            <label>Type</label>
+                            <select id="chart-type">
+                                <option value="bar">Bar</option>
+                                <option value="line">Line</option>
+                                <option value="pie">Pie</option>
+                                <option value="doughnut">Doughnut</option>
+                            </select>
+                        </div>
+                        <div class="form-group-inline">
+                            <label>Name</label>
+                            <input type="text" id="chart-name" placeholder="My Chart">
+                        </div>
+                        <div class="form-group-inline">
+                            <label>Presets</label>
+                            <select id="preset-select" onchange="loadPreset(this.value)">
+                                <option value="">-- select --</option>
+                                <option value="success-rate">Success Rate (pie)</option>
+                                <option value="timeline">Daily Trend (line)</option>
+                                <option value="task-count">Task Count (bar)</option>
+                                <option value="duration">Duration P50/P90 (bar)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <textarea id="formula-editor" spellcheck="false" placeholder="// Input: stats (from /api/v1/stats)
+// Output: { labels: [...], datasets: [{ label, data, ... }] }
+
+return {
+  labels: stats.by_task.map(t => t.task),
+  datasets: [{
+    label: 'Total',
+    data: stats.by_task.map(t => t.total),
+    backgroundColor: '#3498db'
+  }]
+}"></textarea>
+                    <div class="editor-actions">
+                        <button class="btn btn-primary" onclick="renderCustomChart()">Render</button>
+                        <button class="btn" onclick="saveChart()">Save</button>
+                        <span id="editor-msg" class="editor-msg"></span>
+                    </div>
+                </div>
+                <div class="editor-right">
+                    <canvas id="chart-custom"></canvas>
+                    <div id="custom-empty" class="empty">Click "Render" to preview</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 已保存图表 -->
+        <div class="card" id="saved-charts-card" style="display:none">
+            <h2>Saved Charts</h2>
+            <div id="saved-charts" class="saved-grid"></div>
+        </div>
+    </main>
+
+    <script>
+        let statsData = null;
+        let customChart = null;
+        const builtinCharts = {};
+
+        const COLORS = {
+            success: '#2ecc71', failed: '#e74c3c', error: '#f39c12',
+            pending: '#f1c40f', running: '#3498db', cancelled: '#95a5a6',
+            timeout: '#e67e22', unknown: '#888'
+        };
+
+        const CHART_DEFAULTS = {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { labels: { color: '#eee' } }
+            },
+            scales: {
+                x: { ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                y: { ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+            }
+        };
+
+        // 预置公式
+        const PRESETS = {
+            'success-rate': {
+                type: 'doughnut',
+                formula: `return {
+  labels: ['Success', 'Failed', 'Error', 'Other'],
+  datasets: [{
+    data: [
+      stats.summary.success,
+      stats.summary.failed,
+      stats.summary.error,
+      stats.summary.total_jobs - stats.summary.success - stats.summary.failed - stats.summary.error
+    ],
+    backgroundColor: ['#2ecc71', '#e74c3c', '#f39c12', '#888']
+  }]
+}`
+            },
+            'timeline': {
+                type: 'line',
+                formula: `return {
+  labels: stats.timeline.map(d => d.date),
+  datasets: [
+    { label: 'Success', data: stats.timeline.map(d => d.success), borderColor: '#2ecc71', fill: false },
+    { label: 'Failed', data: stats.timeline.map(d => d.failed), borderColor: '#e74c3c', fill: false }
+  ]
+}`
+            },
+            'task-count': {
+                type: 'bar',
+                formula: `return {
+  labels: stats.by_task.map(t => t.task),
+  datasets: [
+    { label: 'Success', data: stats.by_task.map(t => t.success), backgroundColor: '#2ecc71' },
+    { label: 'Failed', data: stats.by_task.map(t => t.failed), backgroundColor: '#e74c3c' }
+  ]
+}`
+            },
+            'duration': {
+                type: 'bar',
+                formula: `return {
+  labels: ['Avg', 'Min', 'Max', 'P50', 'P90'],
+  datasets: [{
+    label: 'Duration (s)',
+    data: [stats.duration.avg, stats.duration.min, stats.duration.max, stats.duration.p50, stats.duration.p90],
+    backgroundColor: ['#3498db', '#2ecc71', '#e74c3c', '#f39c12', '#9b59b6']
+  }]
+}`
+            }
+        };
+
+        function loadPreset(key) {
+            if (!key || !PRESETS[key]) return;
+            const p = PRESETS[key];
+            document.getElementById('chart-type').value = p.type;
+            document.getElementById('formula-editor').value = p.formula;
+            document.getElementById('preset-select').value = '';
+            renderCustomChart();
+        }
+
+        async function loadStats() {
+            try {
+                const res = await fetch('/api/v1/stats');
+                statsData = await res.json();
+                renderBuiltinCharts();
+            } catch (e) {
+                console.error('Failed to load stats:', e);
+            }
+        }
+
+        function makeChart(canvasId, type, data, extraOpts) {
+            const ctx = document.getElementById(canvasId);
+            if (builtinCharts[canvasId]) builtinCharts[canvasId].destroy();
+
+            const isPie = type === 'pie' || type === 'doughnut';
+            const opts = JSON.parse(JSON.stringify(CHART_DEFAULTS));
+            if (isPie) { delete opts.scales; }
+            Object.assign(opts, extraOpts || {});
+
+            builtinCharts[canvasId] = new Chart(ctx, { type, data, options: opts });
+        }
+
+        function renderBuiltinCharts() {
+            if (!statsData) return;
+            const s = statsData;
+
+            // Status doughnut
+            makeChart('chart-status', 'doughnut', {
+                labels: s.by_status.map(x => x.status),
+                datasets: [{
+                    data: s.by_status.map(x => x.count),
+                    backgroundColor: s.by_status.map(x => COLORS[x.status] || '#888')
+                }]
+            });
+
+            // Timeline
+            if (s.timeline.length > 0) {
+                makeChart('chart-timeline', 'line', {
+                    labels: s.timeline.map(d => d.date),
+                    datasets: [
+                        { label: 'Success', data: s.timeline.map(d => d.success), borderColor: '#2ecc71', fill: false, tension: 0.3 },
+                        { label: 'Failed', data: s.timeline.map(d => d.failed), borderColor: '#e74c3c', fill: false, tension: 0.3 }
+                    ]
+                });
+            }
+
+            // By task
+            if (s.by_task.length > 0) {
+                makeChart('chart-tasks', 'bar', {
+                    labels: s.by_task.map(t => t.task),
+                    datasets: [
+                        { label: 'Success', data: s.by_task.map(t => t.success), backgroundColor: '#2ecc71' },
+                        { label: 'Failed', data: s.by_task.map(t => t.failed), backgroundColor: '#e74c3c' }
+                    ]
+                });
+            }
+
+            // By node
+            if (s.by_node.length > 0) {
+                makeChart('chart-nodes', 'bar', {
+                    labels: s.by_node.map(n => n.node),
+                    datasets: [
+                        { label: 'Success', data: s.by_node.map(n => n.success), backgroundColor: '#2ecc71' },
+                        { label: 'Failed', data: s.by_node.map(n => n.failed), backgroundColor: '#e74c3c' }
+                    ]
+                });
+            }
+        }
+
+        function renderCustomChart() {
+            if (!statsData) { showMsg('No data loaded yet', true); return; }
+
+            const formula = document.getElementById('formula-editor').value.trim();
+            const type = document.getElementById('chart-type').value;
+            if (!formula) { showMsg('Formula is empty', true); return; }
+
+            try {
+                const fn = new Function('stats', formula);
+                const data = fn(statsData);
+
+                if (!data || !data.datasets) {
+                    showMsg('Formula must return {labels, datasets}', true);
+                    return;
+                }
+
+                const canvas = document.getElementById('chart-custom');
+                if (customChart) customChart.destroy();
+
+                const isPie = type === 'pie' || type === 'doughnut';
+                const opts = JSON.parse(JSON.stringify(CHART_DEFAULTS));
+                if (isPie) delete opts.scales;
+
+                customChart = new Chart(canvas, { type, data, options: opts });
+                document.getElementById('custom-empty').style.display = 'none';
+                canvas.style.display = 'block';
+                showMsg('OK');
+            } catch (e) {
+                showMsg('Error: ' + e.message, true);
+            }
+        }
+
+        function showMsg(text, isError) {
+            const el = document.getElementById('editor-msg');
+            el.textContent = text;
+            el.style.color = isError ? '#e74c3c' : '#2ecc71';
+            setTimeout(() => { el.textContent = ''; }, 4000);
+        }
+
+        async function saveChart() {
+            const name = document.getElementById('chart-name').value.trim();
+            const type = document.getElementById('chart-type').value;
+            const formula = document.getElementById('formula-editor').value.trim();
+            if (!name) { showMsg('Enter a chart name', true); return; }
+            if (!formula) { showMsg('Formula is empty', true); return; }
+
+            const res = await fetch('/api/v1/charts', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ name, type, formula })
+            });
+            const data = await res.json();
+            if (data.id) {
+                showMsg('Saved: ' + data.id);
+                loadSavedCharts();
+            } else {
+                showMsg(data.error || 'Save failed', true);
+            }
+        }
+
+        async function loadSavedCharts() {
+            const res = await fetch('/api/v1/charts');
+            const data = await res.json();
+            const container = document.getElementById('saved-charts');
+            const card = document.getElementById('saved-charts-card');
+
+            if (!data.charts || data.charts.length === 0) {
+                card.style.display = 'none';
+                return;
+            }
+
+            card.style.display = 'block';
+            container.innerHTML = data.charts.map(c => `
+                <div class="saved-chart-item">
+                    <div class="saved-info">
+                        <strong>${c.name}</strong>
+                        <span class="tag">${c.type}</span>
+                    </div>
+                    <div class="saved-actions">
+                        <button class="btn btn-sm" onclick="loadChart('${c.id}', ${JSON.stringify(JSON.stringify(c.formula))}, '${c.type}', ${JSON.stringify(JSON.stringify(c.name))})">Load</button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteChart('${c.id}')">Delete</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function loadChart(id, formula, type, name) {
+            document.getElementById('formula-editor').value = JSON.parse(formula);
+            document.getElementById('chart-type').value = type;
+            document.getElementById('chart-name').value = JSON.parse(name);
+            renderCustomChart();
+        }
+
+        async function deleteChart(id) {
+            if (!confirm('Delete this chart?')) return;
+            await fetch(`/api/v1/charts/${id}`, { method: 'DELETE' });
+            loadSavedCharts();
+        }
+
+        // Init
+        loadStats();
+        loadSavedCharts();
+        setInterval(loadStats, 30000);
+    </script>
+
+    <style>
+        .page-header { margin-bottom: 2rem; }
+        .page-header h1 { margin-bottom: 0.5rem; }
+        .page-header p { color: var(--text-muted); }
+
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .charts-grid canvas { max-height: 280px; }
+
+        .editor-card { margin-bottom: 1.5rem; }
+        .editor-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+
+        .editor-toolbar {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 0.75rem;
+            flex-wrap: wrap;
+        }
+        .form-group-inline { display: flex; align-items: center; gap: 0.5rem; }
+        .form-group-inline label { font-size: 0.85rem; color: var(--text-muted); white-space: nowrap; }
+        .form-group-inline select,
+        .form-group-inline input {
+            padding: 0.4rem 0.6rem;
+            border: none;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.1);
+            color: var(--text-color);
+            font-size: 0.9rem;
+        }
+
+        #formula-editor {
+            width: 100%;
+            min-height: 260px;
+            padding: 1rem;
+            border: none;
+            border-radius: 4px;
+            background: rgba(0,0,0,0.4);
+            color: #eee;
+            font-family: monospace;
+            font-size: 0.85rem;
+            resize: vertical;
+            tab-size: 2;
+        }
+
+        .editor-actions {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+            margin-top: 0.75rem;
+        }
+        .editor-msg { font-size: 0.85rem; }
+
+        .editor-right {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            min-height: 300px;
+        }
+        .editor-right canvas { max-height: 340px; }
+        #custom-empty { position: absolute; }
+
+        .saved-grid { display: flex; flex-direction: column; gap: 0.5rem; }
+        .saved-chart-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            background: rgba(255,255,255,0.03);
+            border-radius: 4px;
+        }
+        .saved-info { display: flex; align-items: center; gap: 0.75rem; }
+        .saved-actions { display: flex; gap: 0.5rem; }
+        .btn-sm { padding: 0.3rem 0.8rem; font-size: 0.85rem; }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-danger:hover { background: #c0392b; }
+        .tag { background: var(--primary); padding: 0.2rem 0.5rem; border-radius: 3px; font-size: 0.8rem; }
+
+        @media (max-width: 1024px) {
+            .charts-grid { grid-template-columns: 1fr; }
+            .editor-layout { grid-template-columns: 1fr; }
+        }
+    </style>
+</body>
+</html>

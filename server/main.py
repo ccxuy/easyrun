@@ -68,6 +68,17 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS charts (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                type TEXT DEFAULT 'bar',
+                formula TEXT NOT NULL,
+                config TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         conn.commit()
 
 
@@ -114,6 +125,12 @@ def tasks_page():
 def jobs_page():
     """执行记录页面"""
     return render_template('jobs.html')
+
+
+@app.route('/charts')
+def charts_page():
+    """数据可视化页面"""
+    return render_template('charts.html')
 
 
 # =============================================================================
@@ -402,6 +419,166 @@ def api_report_job_result(job_id):
 
     socketio.emit('job_update', job)
     return jsonify({'status': 'ok'})
+
+
+# =============================================================================
+# API Routes - Stats & Charts
+# =============================================================================
+
+@app.route('/api/v1/stats', methods=['GET'])
+def api_stats():
+    """聚合统计数据"""
+    job_list = list(jobs.values())
+
+    # 按状态统计
+    status_counts = {}
+    task_stats = {}
+    node_stats = {}
+    timeline = {}
+    durations = []
+
+    for job in job_list:
+        status = job.get('status', 'unknown')
+        task_name = job.get('task', 'unknown')
+        node = job.get('node_id') or 'local'
+
+        # 状态分布
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+        # 按任务
+        if task_name not in task_stats:
+            task_stats[task_name] = {'task': task_name, 'total': 0, 'success': 0, 'failed': 0}
+        task_stats[task_name]['total'] += 1
+        if status == 'success':
+            task_stats[task_name]['success'] += 1
+        elif status in ('failed', 'error'):
+            task_stats[task_name]['failed'] += 1
+
+        # 按节点
+        if node not in node_stats:
+            node_stats[node] = {'node': node, 'total': 0, 'success': 0, 'failed': 0}
+        node_stats[node]['total'] += 1
+        if status == 'success':
+            node_stats[node]['success'] += 1
+        elif status in ('failed', 'error'):
+            node_stats[node]['failed'] += 1
+
+        # 时间线（按日）
+        created = job.get('created_at', '')
+        if created:
+            date = created[:10]
+            if date not in timeline:
+                timeline[date] = {'date': date, 'total': 0, 'success': 0, 'failed': 0}
+            timeline[date]['total'] += 1
+            if status == 'success':
+                timeline[date]['success'] += 1
+            elif status in ('failed', 'error'):
+                timeline[date]['failed'] += 1
+
+        # 耗时
+        started = job.get('started_at')
+        finished = job.get('finished_at')
+        if started and finished:
+            try:
+                s = datetime.fromisoformat(started)
+                f = datetime.fromisoformat(finished)
+                durations.append((f - s).total_seconds())
+            except (ValueError, TypeError):
+                pass
+
+    total = len(job_list)
+    success = status_counts.get('success', 0)
+    failed = status_counts.get('failed', 0) + status_counts.get('error', 0)
+
+    # 耗时统计
+    duration_stats = {'avg': 0, 'min': 0, 'max': 0, 'p50': 0, 'p90': 0}
+    if durations:
+        durations.sort()
+        duration_stats = {
+            'avg': round(sum(durations) / len(durations), 1),
+            'min': round(durations[0], 1),
+            'max': round(durations[-1], 1),
+            'p50': round(durations[len(durations) // 2], 1),
+            'p90': round(durations[int(len(durations) * 0.9)], 1),
+        }
+
+    # 时间线排序
+    timeline_sorted = sorted(timeline.values(), key=lambda x: x['date'])
+
+    # raw_jobs（最近 200 条，不含 logs 以减少数据量）
+    raw = []
+    for j in sorted(job_list, key=lambda x: x.get('created_at', ''), reverse=True)[:200]:
+        raw.append({
+            'id': j.get('id'),
+            'task': j.get('task'),
+            'node_id': j.get('node_id'),
+            'status': j.get('status'),
+            'exit_code': j.get('exit_code'),
+            'started_at': j.get('started_at'),
+            'finished_at': j.get('finished_at'),
+            'created_at': j.get('created_at'),
+        })
+
+    return jsonify({
+        'summary': {
+            'total_jobs': total,
+            'success': success,
+            'failed': failed,
+            'error': status_counts.get('error', 0),
+            'success_rate': round(success / total * 100, 1) if total > 0 else 0,
+        },
+        'by_status': [{'status': k, 'count': v} for k, v in status_counts.items()],
+        'by_task': list(task_stats.values()),
+        'by_node': list(node_stats.values()),
+        'timeline': timeline_sorted,
+        'duration': duration_stats,
+        'raw_jobs': raw,
+    })
+
+
+@app.route('/api/v1/charts', methods=['GET'])
+def api_list_charts():
+    """列出保存的自定义图表"""
+    with db_lock:
+        with get_db() as conn:
+            rows = conn.execute(
+                'SELECT id, name, type, formula, config, created_at FROM charts ORDER BY created_at DESC'
+            ).fetchall()
+    charts = [dict(r) for r in rows]
+    return jsonify({'charts': charts})
+
+
+@app.route('/api/v1/charts', methods=['POST'])
+def api_save_chart():
+    """保存自定义图表配置"""
+    data = request.json
+    name = data.get('name', '').strip()
+    chart_type = data.get('type', 'bar')
+    formula = data.get('formula', '').strip()
+
+    if not name or not formula:
+        return jsonify({'error': 'name and formula required'}), 400
+
+    chart_id = str(uuid.uuid4())[:8]
+    with db_lock:
+        with get_db() as conn:
+            conn.execute(
+                'INSERT INTO charts (id, name, type, formula, config) VALUES (?, ?, ?, ?, ?)',
+                (chart_id, name, chart_type, formula, json.dumps(data.get('config', {})))
+            )
+            conn.commit()
+
+    return jsonify({'id': chart_id, 'status': 'saved'})
+
+
+@app.route('/api/v1/charts/<chart_id>', methods=['DELETE'])
+def api_delete_chart(chart_id):
+    """删除自定义图表"""
+    with db_lock:
+        with get_db() as conn:
+            conn.execute('DELETE FROM charts WHERE id = ?', (chart_id,))
+            conn.commit()
+    return jsonify({'status': 'deleted'})
 
 
 # =============================================================================
