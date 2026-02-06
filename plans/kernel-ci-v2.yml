@@ -1,0 +1,29 @@
+name: kernel-ci-v2
+desc: "内核 CI 流水线 (编译型)"
+steps:
+  - name: config
+    task: kernel-config
+    vars:
+      EZ_ARCH: x86_64
+
+  - name: build
+    task: kernel-build
+    needs: [config]
+    vars:
+      EZ_ARCH: x86_64
+      EZ_JOBS: "8"
+    artifacts:
+      - name: vmlinux
+        path: build/vmlinux
+
+  - name: test
+    task: kernel-test
+    needs: [build]
+    inputs:
+      - from: build
+        artifact: vmlinux
+        to: ./vmlinux
+
+  - name: package
+    task: kernel-package
+    needs: [build, test]

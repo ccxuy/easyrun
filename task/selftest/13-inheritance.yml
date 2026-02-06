@@ -1,0 +1,53 @@
+# 任务继承、组合、日志路径测试
+version: '3'
+
+tasks:
+  all:
+    desc: "运行所有继承/组合测试"
+    cmds:
+      - task: extends-show
+      - task: extends-run
+      - task: compose-show
+      - task: compose-run
+      - task: log-path
+      - cmd: echo "✓ 13-inheritance 全部通过"
+
+  extends-show:
+    desc: "测试 show 显示继承信息"
+    cmds:
+      - cmd: ./ez show kernel-build-debug | grep -q "Extends:"
+      - cmd: ./ez show kernel-build-debug | grep -q "_base-build"
+      - cmd: ./ez show kernel-build-debug | grep -q "Defaults Override:"
+      - cmd: ./ez show kernel-build-debug | grep -q "EZ_MODE:"
+      - cmd: echo "✓ extends show OK"
+
+  extends-run:
+    desc: "测试继承任务运行"
+    cmds:
+      - cmd: ./ez run kernel-build-debug --dry-run 2>&1 | grep -q "_base-build"
+      - cmd: ./ez run kernel-build-arm EZ_MODE=release --dry-run 2>&1 | grep -q "_base-build"
+      - cmd: echo "✓ extends run OK"
+
+  compose-show:
+    desc: "测试 show 显示组合信息"
+    cmds:
+      - cmd: ./ez show kernel-config-build | grep -q "Composed Tasks:"
+      - cmd: ./ez show kernel-config-build | grep -q "kernel-config"
+      - cmd: ./ez show kernel-config-build | grep -q "kernel-build"
+      - cmd: echo "✓ compose show OK"
+
+  compose-run:
+    desc: "测试组合任务运行"
+    cmds:
+      - cmd: ./ez run kernel-config-build --dry-run 2>&1 | grep -q "\[1/2\]"
+      - cmd: ./ez run kernel-config-build --dry-run 2>&1 | grep -q "\[2/2\]"
+      - cmd: ./ez run kernel-ci-compose --dry-run 2>&1 | grep -q "\[1/3\]"
+      - cmd: echo "✓ compose run OK"
+
+  log-path:
+    desc: "测试自定义日志路径"
+    cmds:
+      - cmd: ./ez show kernel-build-logged | grep -q "Log Config:"
+      - cmd: ./ez show kernel-build-logged | grep -q "logs/kernel-build"
+      - cmd: ./ez show kernel-build-logged | grep -q "Prefix:"
+      - cmd: echo "✓ log-path OK"
