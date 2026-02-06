@@ -27,47 +27,74 @@ cmd_help() {
 EZ - go-task 智能前端
 
 用法:
-    ez <command> [options] [args]
+    ez                      列出任务 (等价于 ez list)
+    ez <name>               直接执行 (等价于 ez run <name>)
+    ez <command> [options]
 
-命令:
-    list                列出所有任务
-    show <task>         显示任务详情
-    run <task>          运行任务（交互式参数）
-    plan list           列出所有计划
-    plan show <plan>    显示计划详情
-    plan run <plan>     执行计划
+核心命令:
+    <name> [KEY=val]    直接执行 (implicit run)
+    list [keyword]      列出任务 (支持搜索过滤, -a 全部, -f 平铺)
+    show <name>         显示详情 (含 skill.yml 元数据)
+    run <name>          运行 (交互式参数)
+    browse [keyword]    交互式浏览器 (↑↓导航)
+    new <name>          创建 Skill (skills/<name>/)
+    check [name]        验证语法和依赖完整性
+    clean <name>        清理运行时数据 (--all 全部)
+
+Skill 管理:
+    skill list          列出所有 Skill
+    skill show <name>   显示 skill.yml 元数据
+    skill export <name> 导出为 .tar.gz
+    skill import <path> 导入 Skill
+
+计划命令:
+    plan                列出所有计划
+    plan new <name>     创建计划
+    plan add <name> <task>  向计划添加步骤
+    plan show <plan>    显示计划结构
+    plan build <name>   编译为可执行 Taskfile
+    plan check <name>   验证依赖完备性
+    plan run <plan>     编译并执行计划
+    plan <name>         直接执行计划 (implicit run)
+
+扩展命令:
     template list       列出可用模板
-    template show <tpl> 显示模板详情
-    template use <tpl>  使用模板生成任务 (支持 ytt)
+    template use <tpl>  使用模板生成任务
     plugin list         列出已安装插件
-    plugin show <name>  显示插件详情
-    plugin run <name>   运行插件脚本
-    plugin install <url> 从 URL 安装插件
     log list            列出最近日志
     log show <pattern>  显示日志内容
-    log clean [days]    清理旧日志
-    version             显示版本信息
-    help                显示帮助
+    completion bash     输出 Bash Tab 补全脚本
+    completion zsh      输出 Zsh Tab 补全脚本
+
+分布式 (可选):
+    server status       检查分布式功能状态
+    server start [port] 启动 Web 服务器
+    server docker up    使用 Docker 启动服务器
+    client start <url>  启动客户端代理
 
 选项:
     --dry-run           只显示命令，不执行
+    --log               记录执行日志
+    --node=<node>       在指定远程节点执行
+    --workspace=<name>  在隔离工作区执行 (auto 自动命名)
+    --no-workspace      Skill 跳过默认 workspace
     --resume            恢复中断的计划
-    --log               记录任务执行日志
 
 示例:
-    ez list
-    ez show build
-    ez run build
-    ez run build --dry-run
-    ez plan list
-    ez plan run kernel-ci
-    ez plan run kernel-ci --log
-    ez log list
-    ez log show kernel-build
-    ez template list
-    ez template use kernel-build --name=mykernel
-    ez template use kernel-matrix --name=linux --arches=x86_64,arm64
-    ez plugin list
+    ez                          # 列出所有任务
+    ez hello                    # 直接执行 hello 任务
+    ez hello EZ_NAME=World      # 带参数执行
+    ez list kernel              # 搜索含 kernel 的任务
+    ez show build               # 查看详情
+    ez new my-skill             # 创建 skills/my-skill/
+    ez check                    # 验证所有任务
+    ez plan run kernel-ci       # 执行计划
+    ez clean my-skill           # 清理运行时数据
+    ez skill export my-skill    # 导出 Skill
+
+Tab 补全:
+    eval "$(ez completion bash)"    # Bash
+    eval "$(ez completion zsh)"     # Zsh
 EOF
 }
 
@@ -108,27 +135,323 @@ cmd_log() {
 # 命令: list
 # -----------------------------------------------------------------------------
 cmd_list() {
-    local taskfile
+    local taskfile filter="" show_all=false group_mode=true
     taskfile=$(find_taskfile ".") || die "未找到 Taskfile"
 
-    echo -e "${BOLD}Tasks in ${taskfile}:${NC}"
-    echo ""
+    # 解析参数
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -a|--all) show_all=true; shift ;;
+            -f|--flat) group_mode=false; shift ;;
+            -g|--grep) filter="$2"; shift 2 ;;
+            *) filter="$1"; shift ;;
+        esac
+    done
 
     local tasks
     tasks=$(get_tasks "$taskfile")
 
-    if [[ -z "$tasks" ]]; then
+    # 收集根 Taskfile 任务
+    local visible_tasks=()
+    local task_sources=()  # 标记来源: "" = 根, "[skill]" = Skill 文件夹
+    while IFS= read -r name; do
+        [[ -z "$name" ]] && continue
+        if [[ "$name" == _* ]] && ! $show_all; then
+            continue
+        fi
+        if [[ -n "$filter" ]] && [[ "$name" != *"$filter"* ]]; then
+            continue
+        fi
+        visible_tasks+=("$name")
+        task_sources+=("")
+    done <<< "$tasks"
+
+    # 收集 Skill (skills/ 目录)
+    if [[ -d "$EZ_SKILLS_DIR" ]]; then
+        while IFS= read -r name; do
+            [[ -z "$name" ]] && continue
+            if [[ -n "$filter" ]] && [[ "$name" != *"$filter"* ]]; then
+                continue
+            fi
+            # 避免与根 Taskfile 中的同名任务重复
+            local dup=false
+            for vt in "${visible_tasks[@]}"; do
+                [[ "$vt" == "$name" ]] && dup=true && break
+            done
+            if ! $dup; then
+                visible_tasks+=("$name")
+                task_sources+=("[skill]")
+            fi
+        done < <(get_skills)
+    fi
+
+    local total=${#visible_tasks[@]}
+
+    if [[ $total -eq 0 ]]; then
         echo "  (无任务)"
         return
     fi
 
+    # 如果任务数量少于 15 或指定 --flat，直接列表显示
+    if [[ $total -lt 15 ]] || ! $group_mode; then
+        echo -e "${BOLD}Tasks:${NC} ($total tasks)"
+        echo ""
+        for ((idx=0; idx<total; idx++)); do
+            local name="${visible_tasks[$idx]}"
+            local source="${task_sources[$idx]}"
+            local desc="" flags=""
+
+            if [[ "$source" == "[skill]" ]]; then
+                # Skill：从 skills/ 子目录 Taskfile 读取描述
+                local ftfile="$EZ_SKILLS_DIR/$name/Taskfile.yml"
+                desc=$(get_task_prop "$ftfile" "default" "desc" 2>/dev/null || true)
+                flags=" ${MAGENTA}[skill]${NC}"
+            else
+                desc=$(get_task_prop "$taskfile" "$name" "desc")
+                has_ez_params "$taskfile" "$name" && flags+=" ${CYAN}[params]${NC}"
+                has_ez_extends "$taskfile" "$name" && flags+=" ${YELLOW}[extends]${NC}"
+                has_ez_compose "$taskfile" "$name" && flags+=" ${BLUE}[compose]${NC}"
+            fi
+
+            printf "  ${GREEN}%-25s${NC} %s%s\n" "$name" "$desc" "$flags"
+        done
+        return
+    fi
+
+    # 分组显示模式
+    echo -e "${BOLD}Tasks:${NC} ($total tasks)"
+    echo -e "${DIM}提示: 使用 'ez list <keyword>' 过滤, 'ez list -f' 平铺显示${NC}"
+    echo ""
+
+    # 按前缀分组
+    declare -A groups
+    declare -A group_sources
+    declare -a no_prefix
+    declare -a no_prefix_sources
+    for ((idx=0; idx<total; idx++)); do
+        local name="${visible_tasks[$idx]}"
+        local source="${task_sources[$idx]}"
+        if [[ "$name" == *-* ]]; then
+            local prefix="${name%%-*}"
+            groups["$prefix"]+="$name "
+            group_sources["${prefix}_${name}"]="$source"
+        else
+            no_prefix+=("$name")
+            no_prefix_sources+=("$source")
+        fi
+    done
+
+    # 显示无前缀的任务
+    if [[ ${#no_prefix[@]} -gt 0 ]]; then
+        echo -e "${BOLD}General:${NC}"
+        for ((idx=0; idx<${#no_prefix[@]}; idx++)); do
+            local name="${no_prefix[$idx]}"
+            local source="${no_prefix_sources[$idx]}"
+            local desc=""
+            local flags=""
+            if [[ "$source" == "[skill]" ]]; then
+                local ftfile="$EZ_SKILLS_DIR/$name/Taskfile.yml"
+                desc=$(get_task_prop "$ftfile" "default" "desc" 2>/dev/null || true)
+                flags=" ${MAGENTA}[skill]${NC}"
+            else
+                desc=$(get_task_prop "$taskfile" "$name" "desc")
+            fi
+            printf "  ${GREEN}%-25s${NC} %s%s\n" "$name" "$desc" "$flags"
+        done
+        echo ""
+    fi
+
+    # 显示分组
+    for prefix in $(echo "${!groups[@]}" | tr ' ' '\n' | sort); do
+        local group_tasks=(${groups[$prefix]})
+        local count=${#group_tasks[@]}
+        echo -e "${BOLD}${prefix}-*${NC} ${DIM}($count tasks)${NC}"
+
+        local shown=0
+        for name in "${group_tasks[@]}"; do
+            if [[ $shown -lt 3 ]]; then
+                local source="${group_sources["${prefix}_${name}"]}"
+                local desc="" flags=""
+                if [[ "$source" == "[skill]" ]]; then
+                    local ftfile="$EZ_SKILLS_DIR/$name/Taskfile.yml"
+                    desc=$(get_task_prop "$ftfile" "default" "desc" 2>/dev/null || true)
+                    flags=" ${MAGENTA}[skill]${NC}"
+                else
+                    desc=$(get_task_prop "$taskfile" "$name" "desc")
+                fi
+                printf "  ${GREEN}%-25s${NC} %s%s\n" "$name" "$desc" "$flags"
+            fi
+            ((shown++))
+        done
+        if [[ $count -gt 3 ]]; then
+            echo -e "  ${DIM}... 还有 $((count-3)) 个任务 (ez list $prefix)${NC}"
+        fi
+        echo ""
+    done
+}
+
+# -----------------------------------------------------------------------------
+# 命令: browse (交互式任务浏览器)
+# -----------------------------------------------------------------------------
+cmd_browse() {
+    local taskfile filter=""
+    taskfile=$(find_taskfile ".") || die "未找到 Taskfile"
+
+    # 可选搜索过滤
+    [[ $# -gt 0 ]] && filter="$1"
+
+    # 获取任务列表
+    local tasks=()
     while IFS= read -r name; do
         [[ -z "$name" ]] && continue
-        local desc param_flag=""
-        desc=$(get_task_prop "$taskfile" "$name" "desc")
-        has_ez_params "$taskfile" "$name" && param_flag=" ${CYAN}[params]${NC}"
-        printf "  ${GREEN}%-20s${NC} %s%s\n" "$name" "$desc" "$param_flag"
-    done <<< "$tasks"
+        [[ "$name" == _* ]] && continue
+        if [[ -n "$filter" ]] && [[ "$name" != *"$filter"* ]]; then
+            continue
+        fi
+        tasks+=("$name")
+    done < <(get_tasks "$taskfile")
+
+    if [[ ${#tasks[@]} -eq 0 ]]; then
+        echo "未找到任务"
+        return 1
+    fi
+
+    local selected=0
+    local expanded=""
+    local show_related=false
+
+    # 主循环
+    while true; do
+        clear
+        echo -e "${BOLD}EZ Task Browser${NC} (↑↓ 导航, Enter 展开, r 运行, d dry-run, s 详情, q 退出)"
+        echo ""
+
+        local i=0
+        for name in "${tasks[@]}"; do
+            local prefix="  "
+            [[ $i -eq $selected ]] && prefix="${GREEN}▶ ${NC}"
+
+            # 获取任务标记
+            local flags=""
+            has_ez_params "$taskfile" "$name" && flags+="${CYAN}P${NC}"
+            has_ez_extends "$taskfile" "$name" && flags+="${YELLOW}E${NC}"
+            has_ez_compose "$taskfile" "$name" && flags+="${BLUE}C${NC}"
+            has_ez_remote "$taskfile" "$name" && flags+="${MAGENTA}R${NC}"
+            has_ez_artifacts "$taskfile" "$name" && flags+="${GREEN}A${NC}"
+
+            local desc
+            desc=$(get_task_prop "$taskfile" "$name" "desc")
+
+            if [[ -n "$flags" ]]; then
+                printf "%s%-25s ${DIM}%s${NC} [%s]\n" "$prefix" "$name" "$desc" "$flags"
+            else
+                printf "%s%-25s ${DIM}%s${NC}\n" "$prefix" "$name" "$desc"
+            fi
+
+            # 如果此任务被展开，显示关联任务
+            if [[ "$expanded" == "$name" ]] && $show_related; then
+                # 依赖任务
+                local deps
+                deps=$(get_task_deps "$taskfile" "$name")
+                if [[ -n "$deps" ]]; then
+                    echo -e "    ${DIM}└─ deps:${NC}"
+                    while IFS= read -r dep; do
+                        [[ -n "$dep" ]] && echo "       → $dep"
+                    done <<< "$deps"
+                fi
+
+                # 继承自
+                if has_ez_extends "$taskfile" "$name"; then
+                    local base
+                    base=$(get_ez_extends "$taskfile" "$name")
+                    echo -e "    ${DIM}└─ extends:${NC} $base"
+                fi
+
+                # 组合任务
+                if has_ez_compose "$taskfile" "$name"; then
+                    echo -e "    ${DIM}└─ compose:${NC}"
+                    local compose_json
+                    compose_json=$(get_ez_compose_json "$taskfile" "$name")
+                    local cc
+                    cc=$(echo "$compose_json" | "$YQ" eval 'length' -)
+                    for ((j=0; j<cc; j++)); do
+                        local ct
+                        ct=$(echo "$compose_json" | "$YQ" eval ".[$j].task" -)
+                        echo "       $((j+1)). $ct"
+                    done
+                fi
+
+                # 远程配置
+                if has_ez_remote "$taskfile" "$name"; then
+                    local nodes
+                    nodes=$(get_ez_remote_nodes "$taskfile" "$name")
+                    echo -e "    ${DIM}└─ remote:${NC} $nodes"
+                fi
+            fi
+
+            ((i++))
+        done
+
+        echo ""
+        echo -e "${DIM}P=params E=extends C=compose R=remote A=artifacts${NC}"
+
+        # 读取按键
+        read -rsn1 key
+        case "$key" in
+            A|B|C|D)
+                # 方向键 (需要额外读取)
+                read -rsn2 -t 0.1 extra
+                case "$extra" in
+                    "[A") ((selected > 0)) && ((selected--)) ;;
+                    "[B") ((selected < ${#tasks[@]}-1)) && ((selected++)) ;;
+                esac
+                ;;
+            $'\x1b')
+                # ESC 序列
+                read -rsn2 -t 0.1 extra
+                case "$extra" in
+                    "[A") ((selected > 0)) && ((selected--)) ;;
+                    "[B") ((selected < ${#tasks[@]}-1)) && ((selected++)) ;;
+                esac
+                ;;
+            "")
+                # Enter - 切换展开
+                local current="${tasks[$selected]}"
+                if [[ "$expanded" == "$current" ]]; then
+                    show_related=false
+                    expanded=""
+                else
+                    expanded="$current"
+                    show_related=true
+                fi
+                ;;
+            r|R)
+                # 运行任务
+                clear
+                cmd_run "${tasks[$selected]}"
+                echo ""
+                read -rp "按 Enter 继续..." </dev/tty
+                ;;
+            d|D)
+                # Dry-run
+                clear
+                cmd_run "${tasks[$selected]}" --dry-run
+                echo ""
+                read -rp "按 Enter 继续..." </dev/tty
+                ;;
+            s|S)
+                # 显示详情
+                clear
+                cmd_show "${tasks[$selected]}"
+                echo ""
+                read -rp "按 Enter 继续..." </dev/tty
+                ;;
+            q|Q)
+                clear
+                return 0
+                ;;
+        esac
+    done
 }
 
 # -----------------------------------------------------------------------------
@@ -140,6 +463,48 @@ cmd_show() {
 
     local taskfile
     taskfile=$(find_taskfile ".") || die "未找到 Taskfile"
+
+    # 检查是否是 Skill
+    if is_skill "$task"; then
+        local skill_dir="$EZ_SKILLS_DIR/$task"
+        local ftfile="$skill_dir/Taskfile.yml"
+        echo -e "${BOLD}Skill: ${GREEN}$task${NC} ${MAGENTA}[skill]${NC}"
+        echo ""
+        echo -e "${BOLD}Directory:${NC} $skill_dir/"
+        echo ""
+
+        # 显示 skill.yml 元数据 (如果存在)
+        if [[ -f "$skill_dir/skill.yml" ]]; then
+            echo -e "${BOLD}Metadata (skill.yml):${NC}"
+            local skill_desc skill_usage
+            skill_desc=$("$YQ" eval '.desc // ""' "$skill_dir/skill.yml" 2>/dev/null)
+            skill_usage=$("$YQ" eval '.usage // ""' "$skill_dir/skill.yml" 2>/dev/null)
+            [[ -n "$skill_desc" && "$skill_desc" != "null" ]] && echo "  desc: $skill_desc"
+            [[ -n "$skill_usage" && "$skill_usage" != "null" ]] && echo "  usage: $skill_usage"
+
+            local tags
+            tags=$("$YQ" eval '.tags // [] | join(", ")' "$skill_dir/skill.yml" 2>/dev/null)
+            [[ -n "$tags" && "$tags" != "null" ]] && echo "  tags: $tags"
+            echo ""
+        fi
+
+        local desc
+        desc=$(get_task_prop "$ftfile" "default" "desc" 2>/dev/null || true)
+        [[ -n "$desc" ]] && echo -e "${BOLD}Description:${NC} $desc" && echo ""
+
+        echo -e "${BOLD}Commands:${NC}"
+        "$YQ" eval '.tasks.default.cmds[].cmd // .tasks.default.cmds[]' "$ftfile" 2>/dev/null | while IFS= read -r cmd; do
+            [[ -n "$cmd" ]] && echo "  - $cmd"
+        done
+        echo ""
+
+        # 显示目录内容
+        echo -e "${BOLD}Files:${NC}"
+        ls -1 "$skill_dir" | while read -r f; do
+            echo "  $f"
+        done
+        return
+    fi
 
     # 检查任务是否存在
     local exists
@@ -154,18 +519,127 @@ cmd_show() {
     desc=$(get_task_prop "$taskfile" "$task" "desc")
     [[ -n "$desc" ]] && echo -e "${BOLD}Description:${NC} $desc" && echo ""
 
-    # 命令
+    # 继承信息
+    if has_ez_extends "$taskfile" "$task"; then
+        local base_task
+        base_task=$(get_ez_extends "$taskfile" "$task")
+        echo -e "${BOLD}Extends:${NC} ${YELLOW}$base_task${NC}"
+
+        # 显示覆盖的默认值
+        local defaults_json
+        defaults_json=$(get_ez_defaults_json "$taskfile" "$task")
+        if [[ "$defaults_json" != "{}" && "$defaults_json" != "null" ]]; then
+            echo -e "${BOLD}Defaults Override:${NC}"
+            echo "$defaults_json" | "$YQ" eval 'to_entries | .[] | "  " + .key + ": " + .value' -
+        fi
+        echo ""
+    fi
+
+    # 组合信息
+    if has_ez_compose "$taskfile" "$task"; then
+        echo -e "${BOLD}Composed Tasks:${NC}"
+        local compose_json
+        compose_json=$(get_ez_compose_json "$taskfile" "$task")
+        local compose_count
+        compose_count=$(echo "$compose_json" | "$YQ" eval 'length' -)
+        for ((i=0; i<compose_count; i++)); do
+            local ctask cdefaults
+            ctask=$(echo "$compose_json" | "$YQ" eval ".[$i].task" -)
+            cdefaults=$(echo "$compose_json" | "$YQ" eval -o=json ".[$i].defaults // {}" -)
+            local step_num=$((i+1))
+            echo -e "  ${CYAN}$step_num. $ctask${NC}"
+            if [[ "$cdefaults" != "{}" && "$cdefaults" != "null" ]]; then
+                echo "$cdefaults" | "$YQ" eval 'to_entries | .[] | "     " + .key + ": " + .value' -
+            fi
+        done
+        echo ""
+    fi
+
+    # 日志配置
+    if has_ez_log "$taskfile" "$task"; then
+        local log_dir log_prefix
+        log_dir=$(get_ez_log_dir "$taskfile" "$task")
+        log_prefix=$(get_ez_log_prefix "$taskfile" "$task")
+        echo -e "${BOLD}Log Config:${NC}"
+        echo -e "  Dir:    ${DIM}$log_dir${NC}"
+        echo -e "  Prefix: ${DIM}$log_prefix${NC}"
+        echo ""
+    fi
+
+    # 远程执行配置
+    if has_ez_remote "$taskfile" "$task"; then
+        echo -e "${BOLD}Remote Execution:${NC}"
+        local remote_json
+        remote_json=$(get_ez_remote_json "$taskfile" "$task")
+        local nodes
+        nodes=$(echo "$remote_json" | "$YQ" eval '.nodes | join(", ") // ""' - 2>/dev/null || true)
+        [[ -n "$nodes" && "$nodes" != "null" ]] && echo -e "  Nodes:    ${MAGENTA}$nodes${NC}"
+        local sync_in
+        sync_in=$(echo "$remote_json" | "$YQ" eval '.sync_in | join(", ") // ""' - 2>/dev/null || true)
+        [[ -n "$sync_in" && "$sync_in" != "null" ]] && echo -e "  Sync In:  ${DIM}$sync_in${NC}"
+        local sync_out
+        sync_out=$(echo "$remote_json" | "$YQ" eval '.sync_out | join(", ") // ""' - 2>/dev/null || true)
+        [[ -n "$sync_out" && "$sync_out" != "null" ]] && echo -e "  Sync Out: ${DIM}$sync_out${NC}"
+        local workdir
+        workdir=$(echo "$remote_json" | "$YQ" eval '.workdir // ""' - 2>/dev/null || true)
+        [[ -n "$workdir" && "$workdir" != "null" ]] && echo -e "  Workdir:  ${DIM}$workdir${NC}"
+        echo ""
+    fi
+
+    # 产物定义
+    if has_ez_artifacts "$taskfile" "$task"; then
+        echo -e "${BOLD}Artifacts:${NC}"
+        local artifacts_json
+        artifacts_json=$(get_ez_artifacts_json "$taskfile" "$task")
+        echo "$artifacts_json" | "$YQ" eval 'to_entries | .[] | "  " + .key + ": " + .value.path + " (" + (.value.desc // "no desc") + ")"' - 2>/dev/null
+        echo ""
+    fi
+
+    # 输入依赖
+    if has_ez_inputs "$taskfile" "$task"; then
+        echo -e "${BOLD}Inputs:${NC}"
+        local inputs_json
+        inputs_json=$(get_ez_inputs_json "$taskfile" "$task")
+        local input_count
+        input_count=$(echo "$inputs_json" | "$YQ" eval 'length' -)
+        for ((i=0; i<input_count; i++)); do
+            local artifact from to
+            artifact=$(echo "$inputs_json" | "$YQ" eval ".[$i].artifact" -)
+            from=$(echo "$inputs_json" | "$YQ" eval ".[$i].from" -)
+            to=$(echo "$inputs_json" | "$YQ" eval ".[$i].to // \"./\"" -)
+            echo -e "  ${CYAN}$artifact${NC} from ${GREEN}$from${NC} → $to"
+        done
+        echo ""
+    fi
+
+    # 命令 (考虑继承)
     echo -e "${BOLD}Commands:${NC}"
-    "$YQ" eval ".tasks.\"$task\".cmds[].cmd // .tasks.\"$task\".cmds[]" "$taskfile" 2>/dev/null | while IFS= read -r cmd; do
-        [[ -n "$cmd" ]] && echo "  - $cmd"
-    done
+    if has_ez_extends "$taskfile" "$task"; then
+        local base_task
+        base_task=$(get_ez_extends "$taskfile" "$task")
+        echo -e "  ${DIM}(inherited from $base_task)${NC}"
+        "$YQ" eval ".tasks.\"$base_task\".cmds[].cmd // .tasks.\"$base_task\".cmds[]" "$taskfile" 2>/dev/null | while IFS= read -r cmd; do
+            [[ -n "$cmd" ]] && echo "  - $cmd"
+        done
+    elif ! has_ez_compose "$taskfile" "$task"; then
+        "$YQ" eval ".tasks.\"$task\".cmds[].cmd // .tasks.\"$task\".cmds[]" "$taskfile" 2>/dev/null | while IFS= read -r cmd; do
+            [[ -n "$cmd" ]] && echo "  - $cmd"
+        done
+    else
+        echo -e "  ${DIM}(see composed tasks above)${NC}"
+    fi
     echo ""
 
-    # EZ 参数
-    if has_ez_params "$taskfile" "$task"; then
-        echo -e "${BOLD}Parameters:${NC}"
-        local params_json
+    # EZ 参数 (考虑继承)
+    local params_json=""
+    if has_ez_extends "$taskfile" "$task"; then
+        params_json=$(resolve_inherited_params "$taskfile" "$task")
+    elif has_ez_params "$taskfile" "$task"; then
         params_json=$(get_ez_params_json "$taskfile" "$task")
+    fi
+
+    if [[ -n "$params_json" && "$params_json" != "[]" && "$params_json" != "null" ]]; then
+        echo -e "${BOLD}Parameters:${NC}"
         local count
         count=$(echo "$params_json" | "$YQ" eval 'length' -)
 
@@ -281,7 +755,7 @@ cmd_run() {
     shift || true
     [[ -z "$task" ]] && die "用法: ez run <task> [options]"
 
-    local taskfile dry_run=false
+    local taskfile dry_run=false enable_log=false remote_node="" workspace="" no_workspace=false
     taskfile=$(find_taskfile ".") || die "未找到 Taskfile"
 
     # 解析选项
@@ -289,18 +763,63 @@ cmd_run() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --dry-run) dry_run=true; shift ;;
+            --log) enable_log=true; shift ;;
+            --node=*) remote_node="${1#--node=}"; shift ;;
+            --node) remote_node="$2"; shift 2 ;;
+            --workspace=*) workspace="${1#--workspace=}"; shift ;;
+            --workspace) workspace="${2:-auto}"; shift 2 ;;
+            --no-workspace) no_workspace=true; shift ;;
             *=*) extra_vars+=("$1"); shift ;;
             *) shift ;;
         esac
     done
 
+    # 检查是否需要远程执行
+    if [[ -n "$remote_node" ]]; then
+        _run_remote_task "$taskfile" "$task" "$remote_node" "$dry_run" "${extra_vars[@]}"
+        return $?
+    fi
+
+    # Workspace 模式
+    if [[ -n "$workspace" ]]; then
+        _run_in_workspace "$taskfile" "$task" "$workspace" "$dry_run" "$enable_log" "${extra_vars[@]}"
+        return $?
+    fi
+
+    # 检查是否是 Skill — 默认在 workspace 中执行
+    if is_skill "$task"; then
+        if [[ "$no_workspace" == "true" ]]; then
+            _run_skill "$task" "$dry_run" "$enable_log" "${extra_vars[@]}"
+        else
+            _run_skill_in_workspace "$task" "$dry_run" "$enable_log" "${extra_vars[@]}"
+        fi
+        return $?
+    fi
+
+    # 检查是否是组合任务
+    if has_ez_compose "$taskfile" "$task"; then
+        _run_composed_task "$taskfile" "$task" "$dry_run" "$enable_log" "${extra_vars[@]}"
+        return $?
+    fi
+
+    # 检查是否是继承任务，获取实际执行的基础任务
+    local actual_task="$task"
+    local params_json=""
+    if has_ez_extends "$taskfile" "$task"; then
+        actual_task=$(get_ez_extends "$taskfile" "$task")
+        params_json=$(resolve_inherited_params "$taskfile" "$task")
+    elif has_ez_params "$taskfile" "$task"; then
+        params_json=$(get_ez_params_json "$taskfile" "$task")
+    fi
+
     # 收集 ez-params 参数（交互式）
-    if has_ez_params "$taskfile" "$task"; then
+    if [[ -n "$params_json" && "$params_json" != "[]" && "$params_json" != "null" ]]; then
         echo -e "${BOLD}Configure: ${GREEN}$task${NC}"
+        if has_ez_extends "$taskfile" "$task"; then
+            echo -e "${DIM}(extends: $actual_task)${NC}"
+        fi
         echo ""
 
-        local params_json
-        params_json=$(get_ez_params_json "$taskfile" "$task")
         local count
         count=$(echo "$params_json" | "$YQ" eval 'length' -)
 
@@ -356,8 +875,8 @@ cmd_run() {
         done
     fi
 
-    # 构建命令
-    local -a cmd=("$TASK" "-t" "$taskfile" "$task")
+    # 构建命令 - 使用实际任务
+    local -a cmd=("$TASK" "-t" "$taskfile" "$actual_task")
     for v in "${extra_vars[@]}"; do
         cmd+=("$v")
     done
@@ -375,8 +894,21 @@ cmd_run() {
 
     # 执行任务并捕获输出和退出码
     local task_output exit_code=0
-    task_output=$("${cmd[@]}" 2>&1) || exit_code=$?
-    echo "$task_output"
+    if $enable_log; then
+        local log_file
+        log_file=$(get_task_log_path "$taskfile" "$task" "$(date +%s)")
+        write_log_header "$log_file" "$task" "" ""
+        echo -e "  ${DIM}Log: $log_file${NC}"
+        local start_time=$(date +%s)
+        task_output=$("${cmd[@]}" 2>&1) || exit_code=$?
+        echo "$task_output"
+        echo "$task_output" >> "$log_file"
+        local end_time=$(date +%s)
+        write_log_footer "$log_file" "$exit_code" "$((end_time - start_time))"
+    else
+        task_output=$("${cmd[@]}" 2>&1) || exit_code=$?
+        echo "$task_output"
+    fi
 
     # post_run 或 on_error 钩子
     if [[ $exit_code -eq 0 ]]; then
@@ -385,6 +917,344 @@ cmd_run() {
         run_hooks "$taskfile" "$task" "on_error" "$exit_code" "$task_output"
         return $exit_code
     fi
+}
+
+# -----------------------------------------------------------------------------
+# 执行 Skill (直接在 skills/ 目录)
+# -----------------------------------------------------------------------------
+_run_skill() {
+    local task="$1" dry_run="$2" enable_log="$3"
+    shift 3
+    local -a extra_vars=("$@")
+
+    local skill_dir="$EZ_SKILLS_DIR/$task"
+    local ftfile="$skill_dir/Taskfile.yml"
+    [[ -f "$ftfile" ]] || ftfile="$skill_dir/Taskfile.yaml"
+
+    local -a cmd=("$TASK" "-d" "$skill_dir" "default")
+    for v in "${extra_vars[@]}"; do
+        cmd+=("$v")
+    done
+
+    if [[ "$dry_run" == "true" ]]; then
+        echo -e "${BOLD}Dry run:${NC} ${cmd[*]}"
+        return 0
+    fi
+
+    echo -e "${BOLD}Running:${NC} ${GREEN}$task${NC} ${MAGENTA}[skill]${NC}"
+    echo -e "  ${DIM}Dir: $skill_dir${NC}"
+    echo ""
+
+    if [[ "$enable_log" == "true" ]]; then
+        local log_file
+        log_file=$(get_log_path "$task" "$(date +%s)" "$task")
+        write_log_header "$log_file" "$task" "" ""
+        echo -e "  ${DIM}Log: $log_file${NC}"
+        local start_time=$(date +%s)
+        local task_output exit_code=0
+        task_output=$("${cmd[@]}" 2>&1) || exit_code=$?
+        echo "$task_output"
+        echo "$task_output" >> "$log_file"
+        local end_time=$(date +%s)
+        write_log_footer "$log_file" "$exit_code" "$((end_time - start_time))"
+        return $exit_code
+    else
+        "${cmd[@]}"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# 执行 Skill (默认在 .ez/skills/<name>/workspace/ 中)
+# -----------------------------------------------------------------------------
+_run_skill_in_workspace() {
+    local task="$1" dry_run="$2" enable_log="$3"
+    shift 3
+    local -a extra_vars=("$@")
+
+    local skill_dir="$EZ_SKILLS_DIR/$task"
+    local ftfile="$skill_dir/Taskfile.yml"
+    [[ -f "$ftfile" ]] || ftfile="$skill_dir/Taskfile.yaml"
+
+    # 创建 skill 默认 workspace
+    local ws_dir
+    ws_dir=$(create_workspace "default" "$task")
+
+    # 复制 Skill 的 Taskfile 到 workspace (非根 Taskfile)
+    cp "$ftfile" "$ws_dir/Taskfile.yml"
+
+    echo -e "${BOLD}Skill:${NC} ${GREEN}$task${NC} ${MAGENTA}[skill]${NC}"
+    echo -e "  ${DIM}Workspace: $ws_dir${NC}"
+    echo ""
+
+    local -a cmd=("$TASK" "-d" "$ws_dir" "default")
+    for v in "${extra_vars[@]}"; do
+        cmd+=("$v")
+    done
+
+    if [[ "$dry_run" == "true" ]]; then
+        echo -e "${BOLD}Dry run:${NC} ${cmd[*]}"
+        return 0
+    fi
+
+    if [[ "$enable_log" == "true" ]]; then
+        local log_file
+        log_file=$(get_log_path "$task" "$(date +%s)" "$task")
+        write_log_header "$log_file" "$task" "" "workspace"
+        echo -e "  ${DIM}Log: $log_file${NC}"
+        local start_time=$(date +%s)
+        local exit_code=0
+        "${cmd[@]}" 2>&1 | tee -a "$log_file" || exit_code=$?
+        local end_time=$(date +%s)
+        write_log_footer "$log_file" "$exit_code" "$((end_time - start_time))"
+        return $exit_code
+    else
+        "${cmd[@]}"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# Workspace 隔离执行
+# -----------------------------------------------------------------------------
+_run_in_workspace() {
+    local taskfile="$1" task="$2" ws_name="$3" dry_run="$4" enable_log="$5"
+    shift 5
+    local -a extra_vars=("$@")
+
+    # 创建工作区
+    local ws_dir
+    ws_dir=$(create_workspace "$ws_name")
+    ws_name=$(basename "$ws_dir")
+
+    echo -e "${BOLD}Workspace:${NC} ${MAGENTA}$ws_name${NC}"
+    echo -e "  Dir: $ws_dir"
+    echo -e "  Src: $ws_dir/src → $EZ_ROOT"
+    echo ""
+
+    if [[ "$dry_run" == "true" ]]; then
+        echo -e "${BOLD}Dry run:${NC} $TASK -d $ws_dir $task ${extra_vars[*]}"
+        return 0
+    fi
+
+    echo -e "${BOLD}Running:${NC} ${GREEN}$task${NC} in workspace"
+    echo ""
+
+    local -a cmd=("$TASK" "-d" "$ws_dir" "$task")
+    for v in "${extra_vars[@]}"; do
+        cmd+=("$v")
+    done
+
+    if [[ "$enable_log" == "true" ]]; then
+        init_log_dir
+        local log_file
+        log_file=$(get_log_path "$task" "$(date +%s)")
+        write_log_header "$log_file" "$task" "" "workspace=$ws_name"
+        echo -e "  ${DIM}Log: $log_file${NC}"
+        local start_time=$(date +%s)
+        local exit_code=0
+        "${cmd[@]}" 2>&1 | tee -a "$log_file" || exit_code=$?
+        local end_time=$(date +%s)
+        write_log_footer "$log_file" "$exit_code" "$((end_time - start_time))"
+        return $exit_code
+    else
+        "${cmd[@]}"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# 执行组合任务
+# -----------------------------------------------------------------------------
+_run_composed_task() {
+    local taskfile="$1" task="$2" dry_run="$3" enable_log="$4"
+    shift 4
+    local -a extra_vars=("$@")
+
+    local compose_json
+    compose_json=$(get_ez_compose_json "$taskfile" "$task")
+    local compose_count
+    compose_count=$(echo "$compose_json" | "$YQ" eval 'length' -)
+
+    # 获取组合任务的全局默认值
+    local task_defaults
+    task_defaults=$(get_ez_defaults_json "$taskfile" "$task")
+
+    echo -e "${BOLD}========================================${NC}"
+    echo -e "${BOLD}Composed Task: ${GREEN}$task${NC} ($compose_count tasks)"
+    echo -e "${BOLD}========================================${NC}"
+    echo ""
+
+    local overall_exit=0
+    for ((i=0; i<compose_count; i++)); do
+        local ctask cdefaults step_num=$((i+1))
+        ctask=$(echo "$compose_json" | "$YQ" eval ".[$i].task" -)
+        cdefaults=$(echo "$compose_json" | "$YQ" eval -o=json ".[$i].defaults // {}" -)
+
+        echo -e "${BOLD}[$step_num/$compose_count] $ctask${NC}"
+
+        # 构建变量列表: 全局默认 < 步骤默认 < 用户预设
+        local -a task_vars=()
+
+        # 1. 全局默认值
+        if [[ "$task_defaults" != "{}" && "$task_defaults" != "null" ]]; then
+            while IFS= read -r key; do
+                [[ -z "$key" ]] && continue
+                local val
+                val=$(echo "$task_defaults" | "$YQ" eval ".$key" -)
+                task_vars+=("$key=$val")
+            done < <(echo "$task_defaults" | "$YQ" eval 'keys | .[]' -)
+        fi
+
+        # 2. 步骤默认值 (覆盖全局)
+        if [[ "$cdefaults" != "{}" && "$cdefaults" != "null" ]]; then
+            while IFS= read -r key; do
+                [[ -z "$key" ]] && continue
+                local val
+                val=$(echo "$cdefaults" | "$YQ" eval ".$key" -)
+                # 删除已存在的同名变量
+                local -a new_vars=()
+                for v in "${task_vars[@]}"; do
+                    [[ "$v" != "$key="* ]] && new_vars+=("$v")
+                done
+                task_vars=("${new_vars[@]}" "$key=$val")
+            done < <(echo "$cdefaults" | "$YQ" eval 'keys | .[]' -)
+        fi
+
+        # 3. 用户预设 (最高优先级)
+        for v in "${extra_vars[@]}"; do
+            local vkey="${v%%=*}"
+            local -a new_vars=()
+            for tv in "${task_vars[@]}"; do
+                [[ "$tv" != "$vkey="* ]] && new_vars+=("$tv")
+            done
+            task_vars=("${new_vars[@]}" "$v")
+        done
+
+        local -a cmd=("$TASK" "-t" "$taskfile" "$ctask")
+        for v in "${task_vars[@]}"; do
+            cmd+=("$v")
+        done
+
+        if [[ "$dry_run" == "true" ]]; then
+            echo "  [dry-run] ${cmd[*]}"
+        elif [[ "$enable_log" == "true" ]]; then
+            local log_file
+            log_file=$(get_task_log_path "$taskfile" "$ctask" "$(date +%s)")
+            write_log_header "$log_file" "$ctask" "" "compose:$task"
+            echo -e "  ${DIM}Log: $log_file${NC}"
+            local start_time=$(date +%s)
+            local task_output exit_code=0
+            task_output=$("${cmd[@]}" 2>&1) || exit_code=$?
+            echo "$task_output"
+            echo "$task_output" >> "$log_file"
+            local end_time=$(date +%s)
+            write_log_footer "$log_file" "$exit_code" "$((end_time - start_time))"
+            [[ $exit_code -ne 0 ]] && overall_exit=$exit_code && break
+        else
+            "${cmd[@]}" || { overall_exit=$?; break; }
+        fi
+        echo ""
+    done
+
+    echo -e "${BOLD}========================================${NC}"
+    if [[ $overall_exit -eq 0 ]]; then
+        echo -e "${GREEN}✓ Composed task completed: $task${NC}"
+    else
+        echo -e "${RED}✗ Composed task failed: $task (exit: $overall_exit)${NC}"
+    fi
+    echo -e "${BOLD}========================================${NC}"
+
+    return $overall_exit
+}
+
+# -----------------------------------------------------------------------------
+# 远程任务执行
+# -----------------------------------------------------------------------------
+_run_remote_task() {
+    local taskfile="$1" task="$2" node="$3" dry_run="$4"
+    shift 4
+    local -a extra_vars=("$@")
+
+    # 检查是否有服务器配置
+    local server_url="${EZ_SERVER_URL:-}"
+    if [[ -z "$server_url" ]]; then
+        # 尝试从配置文件读取
+        if [[ -f "$EZ_ROOT/.ez-config.yml" ]]; then
+            server_url=$("$YQ" eval '.server.url // ""' "$EZ_ROOT/.ez-config.yml" 2>/dev/null)
+        fi
+    fi
+
+    if [[ -z "$server_url" ]]; then
+        die "远程执行需要配置服务器地址。设置 EZ_SERVER_URL 或在 .ez-config.yml 中配置 server.url"
+    fi
+
+    echo -e "${BOLD}Remote Execution${NC}"
+    echo -e "  Task:   ${GREEN}$task${NC}"
+    echo -e "  Node:   ${CYAN}$node${NC}"
+    echo -e "  Server: ${DIM}$server_url${NC}"
+    echo ""
+
+    # 构建变量 JSON
+    local vars_json="{"
+    local first=true
+    for v in "${extra_vars[@]}"; do
+        local key="${v%%=*}"
+        local val="${v#*=}"
+        if ! $first; then vars_json+=","; fi
+        vars_json+="\"$key\":\"$val\""
+        first=false
+    done
+    vars_json+="}"
+
+    if [[ "$dry_run" == "true" ]]; then
+        echo -e "${BOLD}Dry run:${NC}"
+        echo "  POST $server_url/api/v1/tasks/run"
+        echo "  Body: {\"task\":\"$task\",\"node\":\"$node\",\"vars\":$vars_json}"
+        return 0
+    fi
+
+    # 检查 curl 是否可用
+    if ! command -v curl &>/dev/null; then
+        die "curl 未安装，无法执行远程任务"
+    fi
+
+    # 发送任务到服务器
+    local response
+    response=$(curl -sf -X POST "$server_url/api/v1/tasks/run" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${EZ_SERVER_TOKEN:-}" \
+        -d "{\"task\":\"$task\",\"node\":\"$node\",\"vars\":$vars_json}" 2>&1) || {
+        die "远程任务提交失败: $response"
+    }
+
+    local job_id
+    job_id=$(echo "$response" | "$YQ" eval '.job_id // ""' -)
+    if [[ -z "$job_id" || "$job_id" == "null" ]]; then
+        die "无法获取任务 ID: $response"
+    fi
+
+    echo -e "  Job ID: ${YELLOW}$job_id${NC}"
+    echo ""
+    echo -e "${BOLD}Streaming logs...${NC}"
+    echo ""
+
+    # 流式获取日志 (SSE)
+    curl -sf "$server_url/api/v1/jobs/$job_id/logs" \
+        -H "Authorization: Bearer ${EZ_SERVER_TOKEN:-}" \
+        --no-buffer 2>/dev/null || true
+
+    # 获取最终状态
+    local status exit_code
+    status=$(curl -sf "$server_url/api/v1/jobs/$job_id" \
+        -H "Authorization: Bearer ${EZ_SERVER_TOKEN:-}" 2>/dev/null)
+    exit_code=$(echo "$status" | "$YQ" eval '.exit_code // 1' -)
+
+    echo ""
+    if [[ "$exit_code" -eq 0 ]]; then
+        echo -e "${GREEN}✓ Remote task completed${NC}"
+    else
+        echo -e "${RED}✗ Remote task failed (exit: $exit_code)${NC}"
+    fi
+
+    return "$exit_code"
 }
 
 # -----------------------------------------------------------------------------
@@ -398,29 +1268,46 @@ find_planfile() {
     return 1
 }
 
-# plan list - 列出所有计划
+# plan list - 列出所有计划（合并 plans/ 目录 + 旧格式）
 cmd_plan_list() {
-    local planfile
-    planfile=$(find_planfile) || die "未找到计划文件 (.ez-plan.yml)"
-
-    echo -e "${BOLD}Plans in ${planfile}:${NC}"
+    echo -e "${BOLD}Plans:${NC}"
     echo ""
 
-    local plans
-    plans=$("$YQ" eval '.plans | keys | .[]' "$planfile" 2>/dev/null)
+    local found=false
 
-    if [[ -z "$plans" ]]; then
-        echo "  (无计划)"
-        return
+    # 1. plans/ 目录中的新格式 Plan
+    if [[ -d "$EZ_PLANS_DIR" ]]; then
+        for f in "$EZ_PLANS_DIR"/*.yml "$EZ_PLANS_DIR"/*.yaml; do
+            [[ ! -f "$f" ]] && continue
+            found=true
+            local name desc step_count
+            name=$(basename "$f" | sed 's/\.\(yml\|yaml\)$//')
+            desc=$("$YQ" eval '.desc // ""' "$f")
+            step_count=$("$YQ" eval '.steps // [] | length' "$f")
+            printf "  ${GREEN}%-20s${NC} %s ${CYAN}[%s steps]${NC} ${MAGENTA}[v1.2]${NC}\n" "$name" "$desc" "$step_count"
+        done
     fi
 
-    while IFS= read -r name; do
-        [[ -z "$name" ]] && continue
-        local desc step_count
-        desc=$("$YQ" eval ".plans.\"$name\".desc // \"\"" "$planfile")
-        step_count=$("$YQ" eval ".plans.\"$name\".steps | length" "$planfile")
-        printf "  ${GREEN}%-20s${NC} %s ${CYAN}[%s steps]${NC}\n" "$name" "$desc" "$step_count"
-    done <<< "$plans"
+    # 2. 旧格式 .ez-plan.yml
+    local planfile
+    if planfile=$(find_planfile); then
+        local plans
+        plans=$("$YQ" eval '.plans | keys | .[]' "$planfile" 2>/dev/null)
+        while IFS= read -r name; do
+            [[ -z "$name" ]] && continue
+            found=true
+            local desc step_count
+            desc=$("$YQ" eval ".plans.\"$name\".desc // \"\"" "$planfile")
+            step_count=$("$YQ" eval ".plans.\"$name\".steps | length" "$planfile")
+            printf "  ${GREEN}%-20s${NC} %s ${CYAN}[%s steps]${NC}\n" "$name" "$desc" "$step_count"
+        done <<< "$plans"
+    fi
+
+    if ! $found; then
+        echo "  (无计划)"
+        echo ""
+        echo "  创建: ez plan new <name> --desc \"描述\""
+    fi
 }
 
 # plan show - 显示计划详情
@@ -428,8 +1315,16 @@ cmd_plan_show() {
     local plan="${1:-}"
     [[ -z "$plan" ]] && die "用法: ez plan show <plan>"
 
+    # 尝试新格式
+    local plan_file
+    if plan_file=$(find_plan_file "$plan"); then
+        _show_new_plan "$plan_file" "$plan"
+        return
+    fi
+
+    # 回退旧格式
     local planfile
-    planfile=$(find_planfile) || die "未找到计划文件"
+    planfile=$(find_planfile) || die "计划未找到: $plan"
 
     local exists
     exists=$("$YQ" eval ".plans.\"$plan\" // \"\"" "$planfile")
@@ -469,15 +1364,202 @@ cmd_plan_show() {
     done
 }
 
-# plan run - 执行计划
+# 显示新格式 Plan 详情
+_show_new_plan() {
+    local plan_file="$1" plan="$2"
+
+    local plan_name plan_desc
+    plan_name=$("$YQ" eval '.name // ""' "$plan_file")
+    plan_desc=$("$YQ" eval '.desc // ""' "$plan_file")
+
+    echo -e "${BOLD}Plan: ${GREEN}$plan${NC} ${MAGENTA}[v1.2]${NC}"
+    echo -e "  File: $plan_file"
+    echo ""
+
+    [[ -n "$plan_desc" ]] && echo -e "${BOLD}Description:${NC} $plan_desc" && echo ""
+
+    local steps_json
+    steps_json=$("$YQ" eval -o=json '.steps // []' "$plan_file")
+    local step_count
+    step_count=$(echo "$steps_json" | "$YQ" eval 'length' -)
+
+    echo -e "${BOLD}Steps:${NC} ($step_count)"
+    for ((i=0; i<step_count; i++)); do
+        local sname stask sneeds sartifacts sinputs sshuffle
+        sname=$(echo "$steps_json" | "$YQ" eval ".[$i].name // \"step-$i\"" -)
+        stask=$(echo "$steps_json" | "$YQ" eval ".[$i].task // \"\"" -)
+        sneeds=$(echo "$steps_json" | "$YQ" eval ".[$i].needs // [] | join(\", \")" -)
+        sartifacts=$(echo "$steps_json" | "$YQ" eval ".[$i].artifacts // [] | .[].name" - 2>/dev/null)
+        sinputs=$(echo "$steps_json" | "$YQ" eval ".[$i].inputs // [] | length" -)
+        sshuffle=$(echo "$steps_json" | "$YQ" eval ".[$i].shuffle // false" -)
+
+        local step_num=$((i+1))
+        local flags=""
+        [[ -n "$sneeds" ]] && flags+=" needs:[$sneeds]"
+        [[ -n "$sartifacts" ]] && flags+=" artifacts"
+        [[ "$sinputs" -gt 0 ]] 2>/dev/null && flags+=" inputs:$sinputs"
+        [[ "$sshuffle" == "true" ]] && flags+=" shuffle"
+
+        echo -e "  ${CYAN}$step_num. $sname${NC} → task:$stask${DIM}$flags${NC}"
+    done
+
+    # 显示 matrix 如果有
+    local matrix
+    matrix=$("$YQ" eval '.matrix // ""' "$plan_file" 2>/dev/null)
+    if [[ -n "$matrix" && "$matrix" != "null" && "$matrix" != "" ]]; then
+        echo ""
+        echo -e "${BOLD}Matrix:${NC}"
+        "$YQ" eval '.matrix' "$plan_file" 2>/dev/null | while IFS= read -r line; do
+            echo "  $line"
+        done
+    fi
+
+    # 显示编译状态
+    local build_file="$EZ_BUILD_DIR/$plan/Taskfile.yml"
+    if [[ -f "$build_file" ]]; then
+        echo ""
+        echo -e "${BOLD}Build:${NC} ${GREEN}compiled${NC} ($build_file)"
+    fi
+}
+
+# plan new - 创建新的 Plan 文件
+cmd_plan_new() {
+    local name="" desc=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --desc|--description) desc="$2"; shift 2 ;;
+            --desc=*) desc="${1#--desc=}"; shift ;;
+            *) [[ -z "$name" ]] && name="$1" || shift; shift ;;
+        esac
+    done
+
+    [[ -z "$name" ]] && die "用法: ez plan new <name> [--desc \"描述\"]"
+
+    mkdir -p "$EZ_PLANS_DIR"
+
+    local plan_file="$EZ_PLANS_DIR/$name.yml"
+    if [[ -f "$plan_file" ]]; then
+        die "Plan 已存在: $plan_file"
+    fi
+
+    cat > "$plan_file" << EOF
+name: $name
+desc: "$desc"
+steps: []
+EOF
+
+    echo -e "${GREEN}✓ Plan created: $plan_file${NC}"
+    echo "  添加步骤: ez plan add $name <task>"
+}
+
+# plan add - 向 Plan 添加步骤
+cmd_plan_add() {
+    local plan_name="${1:-}"
+    local task_name="${2:-}"
+    shift 2 2>/dev/null || true
+
+    [[ -z "$plan_name" || -z "$task_name" ]] && die "用法: ez plan add <plan> <task> [--name <step-name>] [--needs <step1,step2>]"
+
+    local plan_file
+    plan_file=$(find_plan_file "$plan_name") || die "Plan 未找到: $plan_name\n  创建: ez plan new $plan_name"
+
+    local step_name="$task_name" needs=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --name) step_name="$2"; shift 2 ;;
+            --name=*) step_name="${1#--name=}"; shift ;;
+            --needs) needs="$2"; shift 2 ;;
+            --needs=*) needs="${1#--needs=}"; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    # 构建新的 step YAML
+    local new_step
+    if [[ -n "$needs" ]]; then
+        # 将逗号分隔转为 YAML 数组
+        local needs_yaml="["
+        IFS=',' read -ra needs_arr <<< "$needs"
+        for ((i=0; i<${#needs_arr[@]}; i++)); do
+            [[ $i -gt 0 ]] && needs_yaml+=", "
+            needs_yaml+="\"${needs_arr[$i]}\""
+        done
+        needs_yaml+="]"
+        new_step="{\"name\": \"$step_name\", \"task\": \"$task_name\", \"needs\": $needs_yaml}"
+    else
+        new_step="{\"name\": \"$step_name\", \"task\": \"$task_name\"}"
+    fi
+
+    # 追加步骤
+    "$YQ" eval -i ".steps += [$new_step]" "$plan_file"
+
+    local step_count
+    step_count=$("$YQ" eval '.steps | length' "$plan_file")
+
+    echo -e "${GREEN}✓ Step added: $step_name → task:$task_name${NC}"
+    [[ -n "$needs" ]] && echo -e "  needs: $needs"
+    echo -e "  Plan $plan_name now has $step_count step(s)"
+}
+
+# plan build - 编译 Plan 为可执行 Taskfile
+cmd_plan_build() {
+    local plan_name="${1:-}"
+    [[ -z "$plan_name" ]] && die "用法: ez plan build <plan>"
+
+    local plan_file
+    plan_file=$(find_plan_file "$plan_name") || die "Plan 未找到: $plan_name"
+
+    echo -e "${BOLD}Building plan: $plan_name${NC}"
+    echo "  Source: $plan_file"
+
+    local output_dir
+    output_dir=$(get_plan_build_dir "$plan_name")
+    local output_file
+    output_file=$(compile_plan "$plan_file" "$output_dir") || die "编译失败"
+
+    echo -e "  Output: ${GREEN}$output_file${NC}"
+    echo ""
+    echo -e "${GREEN}✓ Plan compiled successfully${NC}"
+    echo "  审查: cat $output_file"
+    echo "  执行: ez plan run $plan_name"
+}
+
+# plan check - 验证 Plan 依赖完备性
+cmd_plan_check() {
+    local plan_name="${1:-}"
+    [[ -z "$plan_name" ]] && die "用法: ez plan check <plan>"
+
+    local plan_file
+    plan_file=$(find_plan_file "$plan_name") || die "Plan 未找到: $plan_name"
+
+    echo -e "${BOLD}Validating plan: $plan_name${NC}"
+    echo ""
+
+    local result
+    result=$(validate_plan "$plan_file")
+    local exit_code=$?
+
+    echo "$result"
+    echo ""
+
+    if [[ $exit_code -eq 0 ]]; then
+        echo -e "${GREEN}✓ Plan validation passed${NC}"
+    else
+        echo -e "${RED}✗ Plan validation failed ($exit_code error(s))${NC}"
+        return 1
+    fi
+}
+
+# plan run - 编译 + 验证 + 执行 (v1.2 新格式)
+# 保持旧格式兼容
 cmd_plan_run() {
     local plan="${1:-}"
     shift || true
     [[ -z "$plan" ]] && die "用法: ez plan run <plan> [--dry-run] [--resume] [--log]"
 
-    local planfile dry_run=false resume=false enable_log=false
-    planfile=$(find_planfile) || die "未找到计划文件"
-
+    local dry_run=false resume=false enable_log=false
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --dry-run) dry_run=true; shift ;;
@@ -487,20 +1569,98 @@ cmd_plan_run() {
         esac
     done
 
+    # 尝试新格式 (plans/ 目录)
+    local plan_file
+    if plan_file=$(find_plan_file "$plan"); then
+        _run_new_plan "$plan_file" "$plan" "$dry_run" "$enable_log"
+        return $?
+    fi
+
+    # 回退旧格式
+    local planfile
+    planfile=$(find_planfile) || die "计划未找到: $plan"
+
     local exists
     exists=$("$YQ" eval ".plans.\"$plan\" // \"\"" "$planfile")
     [[ -z "$exists" || "$exists" == "null" ]] && die "计划未找到: $plan"
+
+    _run_old_plan "$planfile" "$plan" "$dry_run" "$resume" "$enable_log"
+}
+
+# 执行新格式 Plan (编译 → 验证 → 执行)
+_run_new_plan() {
+    local plan_file="$1" plan_name="$2" dry_run="$3" enable_log="$4"
+
+    local output_dir
+    output_dir=$(get_plan_build_dir "$plan_name")
+
+    # Step 1: 编译
+    echo -e "${BOLD}[1/3] Compiling plan...${NC}"
+    local output_taskfile
+    output_taskfile=$(compile_plan "$plan_file" "$output_dir") || die "编译失败"
+    echo -e "  ${GREEN}✓${NC} $output_taskfile"
+
+    # Step 2: 验证
+    echo -e "${BOLD}[2/3] Validating plan...${NC}"
+    if validate_plan "$plan_file" >/dev/null 2>&1; then
+        echo -e "  ${GREEN}✓${NC} Validation passed"
+    else
+        echo -e "  ${YELLOW}⚠${NC} Validation warnings (continuing)"
+    fi
+
+    # Step 3: 执行
+    echo -e "${BOLD}[3/3] Executing plan...${NC}"
+    echo ""
+
+    export EZ_RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
+
+    if [[ "$dry_run" == "true" ]]; then
+        echo -e "${BOLD}Dry run:${NC} $TASK -d $output_dir default"
+        echo ""
+        echo -e "${DIM}Generated Taskfile:${NC}"
+        cat "$output_taskfile"
+        return 0
+    fi
+
+    if [[ "$enable_log" == "true" ]]; then
+        init_log_dir
+        local log_file
+        log_file=$(get_log_path "$plan_name" "$(date +%s)")
+        write_log_header "$log_file" "plan:$plan_name" "" ""
+        echo -e "  ${DIM}Log: $log_file${NC}"
+
+        local start_time=$(date +%s)
+        local exit_code=0
+        "$TASK" -d "$output_dir" default 2>&1 | tee -a "$log_file" || exit_code=$?
+        local end_time=$(date +%s)
+        write_log_footer "$log_file" "$exit_code" "$((end_time - start_time))"
+
+        echo ""
+        if [[ $exit_code -eq 0 ]]; then
+            echo -e "${GREEN}✓ Plan completed: $plan_name${NC}"
+        else
+            echo -e "${RED}✗ Plan failed: $plan_name (exit $exit_code)${NC}"
+        fi
+        return $exit_code
+    else
+        "$TASK" -d "$output_dir" default
+    fi
+}
+
+# 执行旧格式 Plan (直接执行)
+_run_old_plan() {
+    local planfile="$1" plan="$2" dry_run="$3" resume="$4" enable_log="$5"
 
     local taskfile
     taskfile=$(find_taskfile ".") || die "未找到 Taskfile"
 
     # 状态文件
-    local state_dir=".ez-state"
+    local state_dir="$EZ_STATE_DIR"
     local state_file="$state_dir/$plan.state"
     mkdir -p "$state_dir"
 
     local start_step=0
-    if $resume && [[ -f "$state_file" ]]; then
+    if [[ "$resume" == "true" ]] && [[ -f "$state_file" ]]; then
         start_step=$(cat "$state_file")
         echo -e "${YELLOW}⏩ 从步骤 $((start_step+1)) 恢复${NC}"
     fi
@@ -511,7 +1671,7 @@ cmd_plan_run() {
 
     echo -e "${BOLD}========================================${NC}"
     echo -e "${BOLD}Plan: ${GREEN}$plan${NC}"
-    if $enable_log; then
+    if [[ "$enable_log" == "true" ]]; then
         echo -e "${BOLD}Run ID: ${CYAN}$EZ_RUN_ID${NC}"
     fi
     echo -e "${BOLD}========================================${NC}"
@@ -550,7 +1710,7 @@ cmd_plan_run() {
         echo -e "${BOLD}[$step_num/$step_count] $sname${NC}"
 
         # 保存状态
-        if ! $dry_run; then
+        if [[ "$dry_run" != "true" ]]; then
             echo "$i" > "$state_file"
         fi
 
@@ -558,7 +1718,7 @@ cmd_plan_run() {
         if [[ "$scheckpoint" == "true" ]]; then
             sprompt=$(echo "$steps_json" | "$YQ" eval ".[$i].prompt // \"Continue?\"" -)
             echo -e "${YELLOW}⏸ Checkpoint: $sprompt${NC}"
-            if ! $dry_run; then
+            if [[ "$dry_run" != "true" ]]; then
                 read -rp "  Press Enter to continue, or Ctrl+C to abort..." </dev/tty
             fi
             echo ""
@@ -586,9 +1746,9 @@ cmd_plan_run() {
             done < <(echo "$svars" | "$YQ" eval 'keys | .[]' -)
         fi
 
-        if $dry_run; then
+        if [[ "$dry_run" == "true" ]]; then
             echo "  [dry-run] $TASK -t $taskfile $stask ${task_vars[*]}"
-        elif $enable_log; then
+        elif [[ "$enable_log" == "true" ]]; then
             run_task_with_log "$taskfile" "$stask" "${task_vars[@]}"
         else
             "$TASK" -t "$taskfile" "$stask" "${task_vars[@]}"
@@ -601,7 +1761,7 @@ cmd_plan_run() {
 
     echo -e "${BOLD}========================================${NC}"
     echo -e "${GREEN}✓ Plan completed: $plan${NC}"
-    if $enable_log; then
+    if [[ "$enable_log" == "true" ]]; then
         echo -e "${CYAN}Logs: $EZ_LOG_DIR/${NC}"
     fi
     echo -e "${BOLD}========================================${NC}"
@@ -671,16 +1831,37 @@ _run_matrix_task() {
     fi
 }
 
-# plan 命令路由
+# plan 命令路由 (v1.2: 支持 new/add/build/check + implicit run)
 cmd_plan() {
     local subcmd="${1:-list}"
     shift || true
 
     case "$subcmd" in
-        list|ls)  cmd_plan_list "$@" ;;
-        show)     cmd_plan_show "$@" ;;
-        run)      cmd_plan_run "$@" ;;
-        *)        die "未知 plan 子命令: $subcmd" ;;
+        list|ls)    cmd_plan_list "$@" ;;
+        show)       cmd_plan_show "$@" ;;
+        run)        cmd_plan_run "$@" ;;
+        new|create) cmd_plan_new "$@" ;;
+        add)        cmd_plan_add "$@" ;;
+        build)      cmd_plan_build "$@" ;;
+        check)      cmd_plan_check "$@" ;;
+        *)
+            # 尝试作为 plan 名直接执行 (implicit run)
+            if find_plan_file "$subcmd" >/dev/null 2>&1; then
+                cmd_plan_run "$subcmd" "$@"
+            else
+                # 检查旧格式
+                local planfile
+                if planfile=$(find_planfile); then
+                    local exists
+                    exists=$("$YQ" eval ".plans.\"$subcmd\" // \"\"" "$planfile")
+                    if [[ -n "$exists" && "$exists" != "null" ]]; then
+                        cmd_plan_run "$subcmd" "$@"
+                        return
+                    fi
+                fi
+                die "未知 plan 子命令或计划: $subcmd\n  提示: ez plan list 查看所有计划"
+            fi
+            ;;
     esac
 }
 
@@ -1010,25 +2191,653 @@ cmd_plugin() {
 }
 
 # -----------------------------------------------------------------------------
+# 命令: new (创建 Skill)
+# -----------------------------------------------------------------------------
+cmd_new() {
+    local name="${1:-}"
+    [[ -z "$name" ]] && die "用法: ez new <skill-name>"
+
+    local skill_dir="$EZ_SKILLS_DIR/$name"
+    if [[ -d "$skill_dir" ]]; then
+        die "Skill 已存在: $skill_dir"
+    fi
+
+    mkdir -p "$skill_dir"
+
+    # 创建 Taskfile.yml
+    cat > "$skill_dir/Taskfile.yml" << EOF
+version: '3'
+
+tasks:
+  default:
+    desc: "$name"
+    cmds:
+      - cmd: "echo 'TODO: implement $name'"
+EOF
+
+    # 创建 skill.yml 元数据
+    cat > "$skill_dir/skill.yml" << EOF
+name: $name
+version: "0.1"
+desc: "$name skill"
+
+usage: |
+  TODO: 描述此 Skill 的用途和用法
+
+params: []
+
+tags: []
+examples:
+  - "ez $name"
+EOF
+
+    echo -e "${GREEN}✓ Skill created: $skill_dir/${NC}"
+    echo "  Taskfile: $skill_dir/Taskfile.yml"
+    echo "  Metadata: $skill_dir/skill.yml"
+}
+
+# -----------------------------------------------------------------------------
+# 命令: check (验证任务语法和依赖)
+# -----------------------------------------------------------------------------
+cmd_check() {
+    local target="${1:-}"
+
+    local taskfile
+    taskfile=$(find_taskfile ".") || die "未找到 Taskfile"
+
+    if [[ -z "$target" ]]; then
+        # 验证所有任务
+        echo -e "${BOLD}Checking all tasks...${NC}"
+        echo ""
+
+        local errors=0
+
+        # 检查根 Taskfile 语法
+        if "$YQ" eval '.' "$taskfile" &>/dev/null; then
+            echo -e "  ${GREEN}✓${NC} $taskfile syntax OK"
+        else
+            echo -e "  ${RED}✗${NC} $taskfile syntax error"
+            ((errors++))
+        fi
+
+        # 检查 Skills
+        if [[ -d "$EZ_SKILLS_DIR" ]]; then
+            for dir in "$EZ_SKILLS_DIR"/*/; do
+                [[ ! -d "$dir" ]] && continue
+                local tname
+                tname=$(basename "$dir")
+                local tfile=""
+                [[ -f "$dir/Taskfile.yml" ]] && tfile="$dir/Taskfile.yml"
+                [[ -f "$dir/Taskfile.yaml" ]] && tfile="$dir/Taskfile.yaml"
+
+                if [[ -z "$tfile" ]]; then
+                    echo -e "  ${RED}✗${NC} skills/$tname: missing Taskfile.yml"
+                    ((errors++))
+                    continue
+                fi
+
+                if "$YQ" eval '.' "$tfile" &>/dev/null; then
+                    echo -e "  ${GREEN}✓${NC} skills/$tname OK"
+                else
+                    echo -e "  ${RED}✗${NC} skills/$tname: syntax error"
+                    ((errors++))
+                fi
+            done
+        fi
+
+        # 检查 ez-params 引用
+        local tasks
+        tasks=$(get_tasks "$taskfile")
+        while IFS= read -r task; do
+            [[ -z "$task" ]] && continue
+            _check_task_refs "$taskfile" "$task" || ((errors++))
+        done <<< "$tasks"
+
+        echo ""
+        if [[ $errors -eq 0 ]]; then
+            echo -e "${GREEN}✓ All checks passed${NC}"
+        else
+            echo -e "${RED}✗ $errors error(s) found${NC}"
+            return 1
+        fi
+    else
+        # 验证单个任务
+        echo -e "${BOLD}Checking task: $target${NC}"
+        echo ""
+
+        if is_skill "$target"; then
+            local tfile="$EZ_SKILLS_DIR/$target/Taskfile.yml"
+            if "$YQ" eval '.' "$tfile" &>/dev/null; then
+                echo -e "  ${GREEN}✓${NC} Taskfile syntax OK"
+            else
+                echo -e "  ${RED}✗${NC} Taskfile syntax error"
+                return 1
+            fi
+        elif task_exists "$taskfile" "$target"; then
+            echo -e "  ${GREEN}✓${NC} Task exists in $taskfile"
+            _check_task_refs "$taskfile" "$target"
+        else
+            die "任务未找到: $target"
+        fi
+    fi
+}
+
+# 检查单个任务的引用完整性
+_check_task_refs() {
+    local taskfile="$1"
+    local task="$2"
+    local errors=0
+
+    # 检查 ez-extends 目标是否存在
+    if has_ez_extends "$taskfile" "$task"; then
+        local base
+        base=$(get_ez_extends "$taskfile" "$task")
+        if task_exists "$taskfile" "$base"; then
+            echo -e "  ${GREEN}✓${NC} $task extends $base (found)"
+        else
+            echo -e "  ${RED}✗${NC} $task extends $base (NOT FOUND)"
+            ((errors++))
+        fi
+    fi
+
+    # 检查 ez-compose 引用的任务是否存在
+    if has_ez_compose "$taskfile" "$task"; then
+        local compose_json
+        compose_json=$(get_ez_compose_json "$taskfile" "$task")
+        local count
+        count=$(echo "$compose_json" | "$YQ" eval 'length' -)
+        for ((i=0; i<count; i++)); do
+            local ctask
+            ctask=$(echo "$compose_json" | "$YQ" eval ".[$i].task" -)
+            if task_exists "$taskfile" "$ctask"; then
+                echo -e "  ${GREEN}✓${NC} $task compose[$i] → $ctask (found)"
+            else
+                echo -e "  ${RED}✗${NC} $task compose[$i] → $ctask (NOT FOUND)"
+                ((errors++))
+            fi
+        done
+    fi
+
+    # 检查 ez-inputs 引用的产物来源
+    if has_ez_inputs "$taskfile" "$task"; then
+        local inputs_json
+        inputs_json=$(get_ez_inputs_json "$taskfile" "$task")
+        local count
+        count=$(echo "$inputs_json" | "$YQ" eval 'length' -)
+        for ((i=0; i<count; i++)); do
+            local from_task
+            from_task=$(echo "$inputs_json" | "$YQ" eval ".[$i].from" -)
+            if task_exists "$taskfile" "$from_task"; then
+                echo -e "  ${GREEN}✓${NC} $task input[$i] from $from_task (found)"
+            else
+                echo -e "  ${RED}✗${NC} $task input[$i] from $from_task (NOT FOUND)"
+                ((errors++))
+            fi
+        done
+    fi
+
+    # 检查命令中的外部路径引用
+    local cmds_text
+    cmds_text=$("$YQ" eval ".tasks.\"$task\".cmds[].cmd // \"\"" "$taskfile" 2>/dev/null || true)
+    if [[ -n "$cmds_text" ]]; then
+        while IFS= read -r cmd_line; do
+            [[ -z "$cmd_line" ]] && continue
+            # 检测绝对路径引用
+            local ext_path
+            ext_path=$(echo "$cmd_line" | grep -oE '/[a-z][a-z0-9_/-]+' | head -1)
+            if [[ -n "$ext_path" && "$ext_path" != "/dev/"* && "$ext_path" != "/tmp/"* && "$ext_path" != "/proc/"* ]]; then
+                echo -e "  ${YELLOW}⚠${NC} $task 引用外部路径 $ext_path"
+                echo -e "    ${DIM}该路径需要在执行节点上存在${NC}"
+            fi
+        done <<< "$cmds_text"
+    fi
+
+    return $errors
+}
+
+# -----------------------------------------------------------------------------
+# 命令: completion (输出 Tab 补全脚本)
+# -----------------------------------------------------------------------------
+cmd_completion() {
+    local shell="${1:-bash}"
+
+    case "$shell" in
+        bash)
+            cat << 'COMPLETION_EOF'
+# EZ bash completion
+# Install: ez completion bash > ~/.bash_completion.d/ez && source ~/.bash_completion.d/ez
+# Or: eval "$(ez completion bash)"
+
+_ez_complete() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    local prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+    case $COMP_CWORD in
+        1)
+            local cmds="list show new check browse plan template plugin log server client help version run completion"
+            local tasks=$(_ez_task_names 2>/dev/null)
+            COMPREPLY=($(compgen -W "$cmds $tasks" -- "$cur"))
+            ;;
+        2)
+            case "$prev" in
+                show|check|run)
+                    COMPREPLY=($(compgen -W "$(_ez_task_names)" -- "$cur"))
+                    ;;
+                plan)
+                    COMPREPLY=($(compgen -W "list new add show build check run $(_ez_plan_names)" -- "$cur"))
+                    ;;
+                template|tpl)
+                    COMPREPLY=($(compgen -W "list show use" -- "$cur"))
+                    ;;
+                plugin)
+                    COMPREPLY=($(compgen -W "list show run install" -- "$cur"))
+                    ;;
+                log)
+                    COMPREPLY=($(compgen -W "list show clean" -- "$cur"))
+                    ;;
+                server)
+                    COMPREPLY=($(compgen -W "start docker status" -- "$cur"))
+                    ;;
+                client)
+                    COMPREPLY=($(compgen -W "start" -- "$cur"))
+                    ;;
+                completion)
+                    COMPREPLY=($(compgen -W "bash zsh" -- "$cur"))
+                    ;;
+                new)
+                    # 不补全，用户需要输入新名称
+                    ;;
+            esac
+            ;;
+        3)
+            local pprev="${COMP_WORDS[COMP_CWORD-2]}"
+            case "$pprev" in
+                plan)
+                    case "$prev" in
+                        show|build|check|run)
+                            COMPREPLY=($(compgen -W "$(_ez_plan_names)" -- "$cur"))
+                            ;;
+                        add)
+                            COMPREPLY=($(compgen -W "$(_ez_plan_names)" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_ez_task_names() {
+    local ez_bin="${COMP_WORDS[0]}"
+    "$ez_bin" list -f 2>/dev/null | awk '{print $1}'
+}
+
+_ez_plan_names() {
+    local ez_bin="${COMP_WORDS[0]}"
+    "$ez_bin" plan list 2>/dev/null | awk 'NF>0 && !/^Plans/ && !/^\(/ {print $1}'
+}
+
+complete -F _ez_complete ez
+complete -F _ez_complete ./ez
+COMPLETION_EOF
+            ;;
+        zsh)
+            cat << 'COMPLETION_EOF'
+# EZ zsh completion
+# Install: ez completion zsh > ~/.zsh/completions/_ez
+# Or: eval "$(ez completion zsh)"
+
+_ez() {
+    local -a commands tasks
+    commands=(
+        'list:列出任务'
+        'show:显示任务详情'
+        'run:运行任务'
+        'new:创建文件夹任务'
+        'check:验证任务'
+        'browse:交互式浏览器'
+        'plan:计划管理'
+        'template:模板管理'
+        'plugin:插件管理'
+        'log:日志管理'
+        'server:服务器管理'
+        'client:客户端管理'
+        'completion:输出补全脚本'
+        'version:显示版本'
+        'help:显示帮助'
+    )
+
+    if (( CURRENT == 2 )); then
+        _describe 'command' commands
+        tasks=(${(f)"$(./ez list -f 2>/dev/null | awk '{print $1}')"})
+        [[ ${#tasks[@]} -gt 0 ]] && _describe 'task' tasks
+    fi
+}
+
+compdef _ez ez
+compdef _ez ./ez
+COMPLETION_EOF
+            ;;
+        *)
+            die "支持的 shell: bash, zsh"
+            ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
+# Server/Client 命令 (可选插件)
+# -----------------------------------------------------------------------------
+
+# 检查分布式功能是否可用
+_check_distributed_available() {
+    if ! command -v python3 &>/dev/null; then
+        echo -e "${YELLOW}提示: 分布式功能需要 Python3${NC}"
+        echo "  安装 Python3 后可使用 'ez server' 和 'ez client' 命令"
+        echo ""
+        echo "  EZ 仍可作为独立 CLI 工具使用:"
+        echo "    ez list       - 列出任务"
+        echo "    ez run <task> - 运行任务"
+        echo "    ez plan run   - 执行计划"
+        return 1
+    fi
+    return 0
+}
+
+# 安装 Python 依赖 (仅在需要时)
+_install_server_deps() {
+    local server_req="$EZ_ROOT/server/requirements.txt"
+    if [[ -f "$server_req" ]]; then
+        if ! python3 -c "import flask" 2>/dev/null; then
+            echo -e "${YELLOW}安装 Server 依赖...${NC}"
+            pip3 install -q -r "$server_req" || {
+                echo -e "${RED}依赖安装失败，请手动运行: pip3 install -r server/requirements.txt${NC}"
+                return 1
+            }
+        fi
+    fi
+    return 0
+}
+
+_install_client_deps() {
+    if ! python3 -c "import socketio, requests" 2>/dev/null; then
+        echo -e "${YELLOW}安装 Client 依赖...${NC}"
+        pip3 install -q python-socketio requests || {
+            echo -e "${RED}依赖安装失败，请手动运行: pip3 install python-socketio requests${NC}"
+            return 1
+        }
+    fi
+    return 0
+}
+
+# server start - 启动服务器
+cmd_server_start() {
+    _check_distributed_available || return 1
+    _install_server_deps || return 1
+
+    local port="${1:-8080}"
+
+    echo -e "${BOLD}Starting EZ Server...${NC}"
+    echo -e "  Port: ${GREEN}$port${NC}"
+    echo -e "  Web UI: ${CYAN}http://localhost:$port${NC}"
+    echo ""
+
+    export EZ_ROOT="$EZ_ROOT"
+    export EZ_HTTP_PORT="$port"
+
+    python3 -m server.main
+}
+
+# server docker - 使用 Docker 启动
+cmd_server_docker() {
+    local action="${1:-up}"
+
+    if ! command -v docker &>/dev/null; then
+        die "Docker 未安装"
+    fi
+
+    if [[ ! -f "$EZ_ROOT/docker-compose.yml" ]]; then
+        die "docker-compose.yml 未找到"
+    fi
+
+    case "$action" in
+        up)
+            echo -e "${BOLD}Starting EZ Server (Docker)...${NC}"
+            docker-compose -f "$EZ_ROOT/docker-compose.yml" up -d
+            echo -e "${GREEN}✓ Server started at http://localhost:8080${NC}"
+            ;;
+        down)
+            docker-compose -f "$EZ_ROOT/docker-compose.yml" down
+            echo -e "${GREEN}✓ Server stopped${NC}"
+            ;;
+        logs)
+            docker-compose -f "$EZ_ROOT/docker-compose.yml" logs -f
+            ;;
+        build)
+            docker-compose -f "$EZ_ROOT/docker-compose.yml" build
+            ;;
+        *)
+            die "用法: ez server docker [up|down|logs|build]"
+            ;;
+    esac
+}
+
+# server status - 显示状态信息
+cmd_server_status() {
+    echo -e "${BOLD}EZ 分布式功能状态:${NC}"
+    echo ""
+
+    # Python
+    if command -v python3 &>/dev/null; then
+        echo -e "  Python3: ${GREEN}✓ $(python3 --version 2>&1)${NC}"
+    else
+        echo -e "  Python3: ${RED}✗ 未安装${NC}"
+    fi
+
+    # Flask
+    if python3 -c "import flask" 2>/dev/null; then
+        echo -e "  Flask:   ${GREEN}✓ 已安装${NC}"
+    else
+        echo -e "  Flask:   ${YELLOW}○ 未安装 (pip3 install flask)${NC}"
+    fi
+
+    # Docker
+    if command -v docker &>/dev/null; then
+        echo -e "  Docker:  ${GREEN}✓ 可用${NC}"
+    else
+        echo -e "  Docker:  ${DIM}○ 未安装 (可选)${NC}"
+    fi
+
+    echo ""
+    echo -e "${DIM}提示: 分布式功能为可选，EZ 可独立使用${NC}"
+}
+
+# server 命令路由
+cmd_server() {
+    local subcmd="${1:-status}"
+    shift || true
+
+    case "$subcmd" in
+        start)    cmd_server_start "$@" ;;
+        docker)   cmd_server_docker "$@" ;;
+        status)   cmd_server_status "$@" ;;
+        *)        die "未知 server 子命令: $subcmd，可用: start, docker, status" ;;
+    esac
+}
+
+# client start - 启动客户端代理
+cmd_client_start() {
+    _check_distributed_available || return 1
+    _install_client_deps || return 1
+
+    local server_url="${1:-http://localhost:8080}"
+    local node_name="${2:-$(hostname)-$$}"
+
+    echo -e "${BOLD}Starting EZ Client Agent...${NC}"
+    echo -e "  Server: ${GREEN}$server_url${NC}"
+    echo -e "  Node:   ${CYAN}$node_name${NC}"
+    echo ""
+
+    export EZ_ROOT="$EZ_ROOT"
+    export EZ_SERVER_URL="$server_url"
+    export EZ_NODE_NAME="$node_name"
+
+    python3 "$EZ_ROOT/client/agent.py" --server="$server_url" --name="$node_name"
+}
+
+# client 命令路由
+cmd_client() {
+    local subcmd="${1:-start}"
+    shift || true
+
+    case "$subcmd" in
+        start)    cmd_client_start "$@" ;;
+        *)        die "未知 client 子命令: $subcmd，可用: start" ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
+# 命令: skill (Skill 管理)
+# -----------------------------------------------------------------------------
+cmd_skill_list() {
+    if [[ ! -d "$EZ_SKILLS_DIR" ]] || [[ -z "$(ls -A "$EZ_SKILLS_DIR" 2>/dev/null)" ]]; then
+        echo "  (无 Skill)"
+        echo -e "  ${DIM}提示: ez new <name> 创建新 Skill${NC}"
+        return
+    fi
+
+    echo -e "${BOLD}Skills:${NC}"
+    echo ""
+    for dir in "$EZ_SKILLS_DIR"/*/; do
+        [[ ! -d "$dir" ]] && continue
+        local name desc=""
+        name=$(basename "$dir")
+        if [[ -f "$dir/skill.yml" ]]; then
+            desc=$("$YQ" eval '.desc // ""' "$dir/skill.yml" 2>/dev/null)
+        elif [[ -f "$dir/Taskfile.yml" ]]; then
+            desc=$(get_task_prop "$dir/Taskfile.yml" "default" "desc" 2>/dev/null || true)
+        fi
+        printf "  ${GREEN}%-25s${NC} %s\n" "$name" "$desc"
+    done
+}
+
+cmd_skill_show() {
+    local name="${1:-}"
+    [[ -z "$name" ]] && die "用法: ez skill show <name>"
+    cmd_show "$name"
+}
+
+cmd_skill_export() {
+    local name="${1:-}"
+    [[ -z "$name" ]] && die "用法: ez skill export <name>"
+
+    local skill_dir="$EZ_SKILLS_DIR/$name"
+    [[ -d "$skill_dir" ]] || die "Skill 未找到: $name"
+
+    local output="${name}.tar.gz"
+    tar -czf "$output" -C "$EZ_SKILLS_DIR" "$name"
+    echo -e "${GREEN}✓ Exported: $output${NC}"
+}
+
+cmd_skill_import() {
+    local path="${1:-}"
+    [[ -z "$path" ]] && die "用法: ez skill import <path.tar.gz>"
+    [[ -f "$path" ]] || die "文件不存在: $path"
+
+    mkdir -p "$EZ_SKILLS_DIR"
+    tar -xzf "$path" -C "$EZ_SKILLS_DIR"
+
+    local imported
+    imported=$(tar -tzf "$path" | head -1 | cut -d/ -f1)
+    echo -e "${GREEN}✓ Imported: skills/$imported/${NC}"
+}
+
+cmd_skill() {
+    local subcmd="${1:-list}"
+    shift || true
+
+    case "$subcmd" in
+        list|ls)    cmd_skill_list "$@" ;;
+        show)       cmd_skill_show "$@" ;;
+        export)     cmd_skill_export "$@" ;;
+        import)     cmd_skill_import "$@" ;;
+        *)          die "未知 skill 子命令: $subcmd，可用: list, show, export, import" ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
+# 命令: clean (清理运行时数据)
+# -----------------------------------------------------------------------------
+cmd_clean() {
+    local target="${1:-}"
+
+    if [[ -z "$target" ]]; then
+        die "用法: ez clean <name> | --all | --logs | --workspace"
+    fi
+
+    case "$target" in
+        --all)
+            rm -rf "$EZ_DIR"
+            echo -e "${GREEN}✓ Cleaned: .ez/ (all runtime data)${NC}"
+            ;;
+        --logs)
+            rm -rf "$EZ_DIR"/skills/*/logs "$EZ_DIR"/plans/*/logs "$EZ_LOG_DIR"
+            echo -e "${GREEN}✓ Cleaned: all logs${NC}"
+            ;;
+        --workspace)
+            rm -rf "$EZ_DIR"/skills/*/workspace "$EZ_WORKSPACE_DIR"
+            echo -e "${GREEN}✓ Cleaned: all workspaces${NC}"
+            ;;
+        *)
+            # 尝试清理 skill 或 plan
+            if [[ -d "$EZ_DIR/skills/$target" ]]; then
+                rm -rf "$EZ_DIR/skills/$target"
+                echo -e "${GREEN}✓ Cleaned: .ez/skills/$target/${NC}"
+            elif [[ -d "$EZ_DIR/plans/$target" ]]; then
+                rm -rf "$EZ_DIR/plans/$target"
+                echo -e "${GREEN}✓ Cleaned: .ez/plans/$target/${NC}"
+            else
+                echo -e "${YELLOW}Nothing to clean for: $target${NC}"
+            fi
+            ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
 # 主入口
 # -----------------------------------------------------------------------------
 main() {
     check_deps
 
-    local cmd="${1:-help}"
+    local cmd="${1:-list}"  # 无参数默认 list
     shift || true
 
     case "$cmd" in
         list|ls)      cmd_list "$@" ;;
-        show|info)    cmd_show "$@" ;;
+        browse)       cmd_browse "$@" ;;
+        show|describe) cmd_show "$@" ;;
         run|exec)     cmd_run "$@" ;;
+        new)          cmd_new "$@" ;;
+        check)        cmd_check "$@" ;;
+        clean)        cmd_clean "$@" ;;
+        skill)        cmd_skill "$@" ;;
+        completion)   cmd_completion "$@" ;;
         plan)         cmd_plan "$@" ;;
         template|tpl) cmd_template "$@" ;;
         plugin)       cmd_plugin "$@" ;;
         log)          cmd_log "$@" ;;
+        server)       cmd_server "$@" ;;
+        client)       cmd_client "$@" ;;
         version|-v|--version)   cmd_version ;;
         help|-h|--help)         cmd_help ;;
-        *)            die "未知命令: $cmd，运行 'ez help' 查看帮助" ;;
+        *)
+            # 尝试作为 task 名直接执行 (implicit run)
+            local taskfile
+            if taskfile=$(find_taskfile ".") && task_exists "$taskfile" "$cmd"; then
+                cmd_run "$cmd" "$@"
+            else
+                die "未知命令或任务: $cmd\n  提示: ez list 查看可用任务, ez help 查看帮助"
+            fi
+            ;;
     esac
 }
 

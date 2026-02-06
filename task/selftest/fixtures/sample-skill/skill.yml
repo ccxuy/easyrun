@@ -1,0 +1,13 @@
+name: sample-skill
+version: "0.1"
+desc: "Sample skill for testing"
+
+usage: |
+  A test fixture skill used by EZ selftest.
+  Outputs a greeting message.
+
+params: []
+
+tags: [test, sample]
+examples:
+  - "ez sample-skill"

@@ -1,3 +1,10 @@
 # 下载的二进制文件 (通过 dep/install-deps.sh 安装)
 dep/task
 dep/yq
+
+# EZ 运行时数据
+.ez/
+.ez-logs/
+.ez-artifacts/
+.ez-state/
+.ez-results/

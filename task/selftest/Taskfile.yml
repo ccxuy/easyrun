@@ -38,6 +38,18 @@ includes:
   log:
     taskfile: ./12-log.yml
     dir: ../..
+  inheritance:
+    taskfile: ./13-inheritance.yml
+    dir: ../..
+  server:
+    taskfile: ./14-server.yml
+    dir: ../..
+  plan-compile:
+    taskfile: ./16-plan-compile.yml
+    dir: ../..
+  workspace:
+    taskfile: ./17-workspace.yml
+    dir: ../..
 
 tasks:
   default:
@@ -70,6 +82,14 @@ tasks:
       - task: remote:all
       - cmd: echo ""
       - task: log:all
+      - cmd: echo ""
+      - task: inheritance:all
+      - cmd: echo ""
+      - task: server:all
+      - cmd: echo ""
+      - task: plan-compile:all
+      - cmd: echo ""
+      - task: workspace:all
       - cmd: echo ""
       - cmd: echo "================================================"
       - cmd: echo "✓ 所有测试通过!"

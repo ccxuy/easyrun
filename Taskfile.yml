@@ -286,6 +286,46 @@ tasks:
         help: "选择远程主机"
 
   # ==========================================================================
+  # 分布式执行示例 (ez-remote + ez-artifacts)
+  # ==========================================================================
+  distributed-build:
+    desc: "分布式构建 (可在远程节点执行)"
+    cmds:
+      - cmd: 'echo "Building for {{.EZ_ARCH}}..."'
+      - cmd: 'mkdir -p build && echo "binary-{{.EZ_ARCH}}" > build/output.bin'
+      - cmd: 'echo "Build completed!"'
+    ez-params:
+      - name: "arch"
+        type: "select"
+        options: ["x86_64", "arm64", "riscv64"]
+        default: "x86_64"
+        help: "目标架构"
+    ez-remote:
+      nodes: ["builder-1", "builder-2"]
+      sync_in:
+        - "./src/"
+        - "./Makefile"
+      sync_out:
+        - "./build/"
+      workdir: "/tmp/build-{{.EZ_RUN_ID}}"
+    ez-artifacts:
+      output:
+        path: "build/output.bin"
+        desc: "构建产物"
+
+  distributed-test:
+    desc: "分布式测试 (依赖构建产物)"
+    cmds:
+      - cmd: 'echo "Testing artifact: {{.EZ_ARTIFACT}}"'
+      - cmd: 'echo "Test passed!"'
+    ez-inputs:
+      - artifact: output
+        from: distributed-build
+        to: "./test/output.bin"
+    ez-remote:
+      nodes: ["tester-1"]
+
+  # ==========================================================================
   # 结果归档和统计任务
   # ==========================================================================
   result-archive:
@@ -324,3 +364,111 @@ tasks:
         type: "input"
         default: "10"
         help: "保留的运行数量"
+
+  # ==========================================================================
+  # 任务继承示例 (ez-extends)
+  # ==========================================================================
+
+  # 基础构建任务 (可被继承)
+  _base-build:
+    desc: "基础构建任务"
+    cmds:
+      - cmd: 'echo "[base-build] ARCH={{.EZ_ARCH}} MODE={{.EZ_MODE}}"'
+      - cmd: 'echo "[base-build] 执行构建..."'
+    ez-params:
+      - name: "arch"
+        type: "select"
+        options: ["x86_64", "arm64", "riscv"]
+        default: "x86_64"
+        help: "目标架构"
+      - name: "mode"
+        type: "select"
+        options: ["debug", "release"]
+        default: "release"
+        help: "构建模式"
+
+  # 继承基础构建，覆盖默认参数
+  kernel-build-debug:
+    desc: "内核调试构建 (继承自 _base-build)"
+    ez-extends: "_base-build"
+    ez-defaults:
+      EZ_MODE: "debug"
+      EZ_ARCH: "x86_64"
+
+  # 继承基础构建，用于 ARM
+  kernel-build-arm:
+    desc: "ARM 内核构建 (继承自 _base-build)"
+    ez-extends: "_base-build"
+    ez-defaults:
+      EZ_ARCH: "arm64"
+      EZ_MODE: "release"
+
+  # ==========================================================================
+  # 任务组合示例 (ez-compose)
+  # ==========================================================================
+
+  # 组合任务: 配置 + 构建
+  kernel-config-build:
+    desc: "配置并构建内核 (组合任务)"
+    ez-compose:
+      - task: "kernel-config"
+        defaults:
+          EZ_ARCH: "x86_64"
+          EZ_CONFIG: "defconfig"
+      - task: "kernel-build"
+        defaults:
+          EZ_ARCH: "x86_64"
+          EZ_JOBS: "8"
+
+  # 完整 CI 组合: 配置 + 构建 + 测试
+  kernel-ci-compose:
+    desc: "完整内核 CI (组合任务)"
+    ez-compose:
+      - task: "kernel-config"
+      - task: "kernel-build"
+      - task: "kernel-test"
+        defaults:
+          EZ_SUITE: "smoke"
+    ez-defaults:
+      EZ_ARCH: "x86_64"
+
+  # ==========================================================================
+  # 自定义日志路径示例 (ez-log)
+  # ==========================================================================
+
+  kernel-build-logged:
+    desc: "构建内核 (自定义日志路径)"
+    cmds:
+      - cmd: 'echo "[build] ARCH={{.EZ_ARCH}} JOBS={{.EZ_JOBS}}"'
+      - cmd: 'echo "[build] 编译中..."'
+      - cmd: 'sleep 1'
+      - cmd: 'echo "[build] 完成"'
+    ez-params:
+      - name: "arch"
+        type: "select"
+        options: ["x86_64", "arm64"]
+        default: "x86_64"
+        help: "目标架构"
+      - name: "jobs"
+        type: "input"
+        default: "4"
+        help: "并行数"
+    ez-log:
+      dir: "logs/kernel-build"
+      prefix: "build"
+
+  kernel-test-logged:
+    desc: "测试内核 (自定义日志路径)"
+    cmds:
+      - cmd: 'echo "[test] SUITE={{.EZ_SUITE}}"'
+      - cmd: 'echo "[test] 运行测试..."'
+      - cmd: 'echo "[test] PASS"'
+    ez-params:
+      - name: "suite"
+        type: "select"
+        options: ["unit", "smoke", "full"]
+        default: "smoke"
+        help: "测试套件"
+    ez-log:
+      dir: "logs/kernel-test"
+      prefix: "test"

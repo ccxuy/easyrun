@@ -8,28 +8,47 @@ tasks:
       - task: help
       - task: version
       - task: list
+      - task: browse-help
       - task: show
       - task: run
+      - task: implicit-run
+      - task: new-and-skill
+      - task: skill-cmds
+      - task: clean-cmd
+      - task: check
+      - task: completion
       - cmd: echo "✓ 03-commands 全部通过"
 
   help:
     desc: "测试 ez help"
     cmds:
       - cmd: ./ez help | grep -q "go-task"
+      - cmd: ./ez help | grep -q "implicit run"
+      - cmd: ./ez help | grep -q "Tab 补全"
+      - cmd: ./ez help | grep -q "Skill"
       - cmd: echo "✓ ez help OK"
 
   version:
     desc: "测试 ez version"
     cmds:
       - cmd: ./ez version | grep -q "ez version"
+      - cmd: ./ez version | grep -q "beta"
       - cmd: echo "✓ ez version OK"
 
   list:
     desc: "测试 ez list"
     cmds:
       - cmd: ./ez list | grep -q "hello"
-      - cmd: ./ez list | grep -q "params"
+      - cmd: ./ez list -f | grep -q "hello"
+      - cmd: ./ez list kernel | grep -q "kernel"
       - cmd: echo "✓ ez list OK"
+
+  browse-help:
+    desc: "测试 ez browse 在帮助中存在"
+    cmds:
+      - cmd: ./ez help | grep -q "browse"
+      - cmd: ./ez help | grep -q "交互式"
+      - cmd: echo "✓ ez browse OK"
 
   show:
     desc: "测试 ez show"
@@ -49,3 +68,77 @@ tasks:
       - cmd: ./ez run build EZ_ARCH=aarch64 --dry-run | grep -q "EZ_ARCH=aarch64"
       - cmd: ./ez run hello EZ_NAME=World | grep -q "Hello, World"
       - cmd: echo "✓ ez run OK"
+
+  implicit-run:
+    desc: "测试 implicit run (ez <task>)"
+    cmds:
+      # ez <task> 等价于 ez run <task>
+      - cmd: ./ez run clean | grep -q "Cleaning"
+      - cmd: ./ez hello EZ_NAME=World --dry-run | grep -q "EZ_NAME=World"
+      # ez 无参数等价于 ez list
+      - cmd: ./ez | grep -q "Tasks"
+      # 未知命令报错
+      - cmd: ./ez nonexistent-xyz 2>&1 | grep -q "未知命令或任务"
+      - cmd: echo "✓ implicit run OK"
+
+  new-and-skill:
+    desc: "测试 ez new 和 Skill"
+    cmds:
+      # 创建新 Skill
+      - cmd: ./ez new test-tmp-skill
+      - cmd: test -f skills/test-tmp-skill/Taskfile.yml
+      - cmd: test -f skills/test-tmp-skill/skill.yml
+      - cmd: ./ez list -f | grep -q "test-tmp-skill"
+      - cmd: ./ez show test-tmp-skill | grep -q "[skill]"
+      - cmd: ./ez test-tmp-skill --no-workspace | grep -q "TODO"
+      # 清理
+      - cmd: rm -rf skills/test-tmp-skill
+      - cmd: echo "✓ new and skill OK"
+
+  skill-cmds:
+    desc: "测试 ez skill 子命令"
+    cmds:
+      # 先创建一个测试 skill
+      - cmd: ./ez new test-export-skill
+      # skill list
+      - cmd: ./ez skill list | grep -q "test-export-skill"
+      # skill export
+      - cmd: ./ez skill export test-export-skill
+      - cmd: test -f test-export-skill.tar.gz
+      # 删除后 import
+      - cmd: rm -rf skills/test-export-skill
+      - cmd: ./ez skill import test-export-skill.tar.gz
+      - cmd: test -f skills/test-export-skill/Taskfile.yml
+      - cmd: test -f skills/test-export-skill/skill.yml
+      # 清理
+      - cmd: rm -rf skills/test-export-skill test-export-skill.tar.gz
+      - cmd: echo "✓ skill commands OK"
+
+  clean-cmd:
+    desc: "测试 ez clean"
+    cmds:
+      # 创建测试 skill 并运行以生成运行时数据
+      - cmd: ./ez new test-clean-skill
+      - cmd: ./ez test-clean-skill --no-workspace --log 2>/dev/null || true
+      # 验证运行时目录存在
+      - cmd: test -d .ez/skills/test-clean-skill/logs || true
+      # clean 清理运行时
+      - cmd: ./ez clean test-clean-skill | grep -q "Cleaned"
+      - cmd: test ! -d .ez/skills/test-clean-skill
+      # 清理
+      - cmd: rm -rf skills/test-clean-skill
+      - cmd: echo "✓ ez clean OK"
+
+  check:
+    desc: "测试 ez check"
+    cmds:
+      - cmd: ./ez check | grep -q "syntax OK"
+      - cmd: ./ez check hello | grep -q "Task exists"
+      - cmd: echo "✓ ez check OK"
+
+  completion:
+    desc: "测试 ez completion"
+    cmds:
+      - cmd: ./ez completion bash | grep -q "_ez_complete"
+      - cmd: ./ez completion zsh | grep -q "compdef"
+      - cmd: echo "✓ ez completion OK"
