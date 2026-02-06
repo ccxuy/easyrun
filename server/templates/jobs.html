@@ -3,162 +3,289 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Jobs - EZ Dashboard</title>
+    <title>执行记录 - EZ 管理平台</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <script src="/static/js/socket.io.min.js"></script>
 </head>
 <body>
     <nav class="navbar">
-        <div class="nav-brand">EZ Dashboard</div>
+        <div class="nav-brand">EZ 管理平台</div>
         <div class="nav-links">
-            <a href="/">Overview</a>
-            <a href="/nodes">Nodes</a>
-            <a href="/tasks">Tasks</a>
-            <a href="/jobs" class="active">Jobs</a>
-            <a href="/charts">Charts</a>
+            <a href="/">总览</a>
+            <a href="/tasks">任务</a>
+            <a href="/plans">计划</a>
+            <a href="/jobs" class="active">执行记录</a>
+            <a href="/nodes">节点</a>
+            <a href="/charts">统计</a>
         </div>
     </nav>
 
     <main class="container">
         <div class="page-header">
-            <h1>Jobs</h1>
-            <p>Task execution history</p>
+            <h1>执行记录</h1>
+            <p>任务执行历史与日志查看</p>
         </div>
 
-        <div class="jobs-layout">
-            <div class="card jobs-list-card">
-                <h2>Job History</h2>
-                <div id="jobs-list">
-                    <div class="loading">Loading jobs...</div>
+        <!-- 选项卡 -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('server')">Server 执行</button>
+            <button class="tab" onclick="switchTab('cli')">CLI 上报</button>
+        </div>
+
+        <!-- Server 执行记录 -->
+        <div id="tab-server" class="tab-panel">
+            <div class="card">
+                <h2>Server 执行记录</h2>
+                <div style="overflow-x:auto;">
+                    <table id="jobs-table" class="table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>任务</th>
+                                <th>节点</th>
+                                <th>状态</th>
+                                <th>耗时</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td colspan="6" class="loading">加载中...</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
-            <div class="card job-detail-card">
-                <h2>Job Details</h2>
-                <div id="job-detail">
-                    <div class="empty">Select a job to view details</div>
+            <!-- 任务详情面板 -->
+            <div id="job-detail-panel" class="card" style="display:none; margin-top:1.2rem;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                    <h2 id="detail-title" style="margin-bottom:0;">任务详情</h2>
+                    <button class="btn btn-sm" onclick="closeDetail()">&times; 关闭</button>
+                </div>
+                <div id="job-detail-body"></div>
+            </div>
+        </div>
+
+        <!-- CLI 执行记录 -->
+        <div id="tab-cli" class="tab-panel" style="display:none;">
+            <div class="card">
+                <h2>CLI 上报记录</h2>
+                <div style="overflow-x:auto;">
+                    <table id="cli-table" class="table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>任务</th>
+                                <th>退出码</th>
+                                <th>耗时</th>
+                                <th>主机</th>
+                                <th>时间</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td colspan="6" class="loading">加载中...</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
     </main>
 
     <script>
-        const socket = io();
-        let selectedJobId = new URLSearchParams(window.location.search).get('id');
+        var socket = io();
+        var selectedJobId = new URLSearchParams(window.location.search).get('id');
+
+        var statusLabels = {
+            success: '成功', failed: '失败', error: '错误',
+            running: '运行中', pending: '等待中', cancelled: '已取消', timeout: '超时'
+        };
+
+        function escapeHtml(str) {
+            var div = document.createElement('div');
+            div.textContent = str || '';
+            return div.innerHTML;
+        }
+
+        function formatDuration(started, finished) {
+            if (!started || !finished) return '-';
+            var ms = new Date(finished) - new Date(started);
+            var s = Math.round(ms / 1000);
+            if (s < 0) return '-';
+            if (s < 60) return s + '秒';
+            if (s < 3600) return Math.floor(s / 60) + '分' + (s % 60) + '秒';
+            return Math.floor(s / 3600) + '时' + Math.floor((s % 3600) / 60) + '分';
+        }
+
+        function formatDurationSec(seconds) {
+            if (!seconds && seconds !== 0) return '-';
+            var s = Math.round(seconds);
+            if (s < 60) return s + '秒';
+            if (s < 3600) return Math.floor(s / 60) + '分' + (s % 60) + '秒';
+            return Math.floor(s / 3600) + '时' + Math.floor((s % 3600) / 60) + '分';
+        }
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(function(el) { el.classList.remove('active'); });
+            document.querySelectorAll('.tab-panel').forEach(function(el) { el.style.display = 'none'; });
+
+            if (tab === 'server') {
+                document.querySelector('.tab:first-child').classList.add('active');
+                document.getElementById('tab-server').style.display = 'block';
+            } else {
+                document.querySelector('.tab:last-child').classList.add('active');
+                document.getElementById('tab-cli').style.display = 'block';
+                loadCliExecutions();
+            }
+        }
 
         async function loadJobs() {
-            const res = await fetch('/api/v1/jobs');
-            const data = await res.json();
-            const container = document.getElementById('jobs-list');
+            try {
+                var res = await fetch('/api/v1/jobs');
+                var data = await res.json();
+                var tbody = document.querySelector('#jobs-table tbody');
 
-            if (data.jobs.length === 0) {
-                container.innerHTML = '<div class="empty">No jobs yet</div>';
-                return;
+                if (!data.jobs || data.jobs.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无执行记录</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = data.jobs.map(function(job) {
+                    var duration = formatDuration(job.started_at, job.finished_at);
+                    var statusClass = job.status || '';
+                    var isSelected = job.id === selectedJobId;
+                    return '<tr class="' + (isSelected ? 'selected-row' : '') + '">' +
+                        '<td><code>' + escapeHtml(job.id) + '</code></td>' +
+                        '<td><strong>' + escapeHtml(job.task) + '</strong></td>' +
+                        '<td>' + escapeHtml(job.node_id || '本地') + '</td>' +
+                        '<td><span class="status-badge ' + escapeHtml(statusClass) + '">' +
+                        (statusLabels[statusClass] || statusClass) + '</span></td>' +
+                        '<td>' + duration + '</td>' +
+                        '<td>' +
+                        '<button class="btn btn-sm btn-primary" onclick="showJobDetail(\'' + escapeHtml(job.id) + '\')">查看</button> ' +
+                        (job.status === 'pending' || job.status === 'running'
+                            ? '<button class="btn btn-sm btn-danger" onclick="cancelJob(\'' + escapeHtml(job.id) + '\')">取消</button>'
+                            : '') +
+                        '</td></tr>';
+                }).join('');
+
+                // 自动展开 URL 中指定的任务
+                if (selectedJobId) {
+                    showJobDetail(selectedJobId);
+                }
+            } catch (e) {
+                document.querySelector('#jobs-table tbody').innerHTML =
+                    '<tr><td colspan="6" class="empty">加载失败</td></tr>';
             }
+        }
 
-            container.innerHTML = `
-                <div class="job-items">
-                    ${data.jobs.map(job => {
-                        const duration = job.finished_at && job.started_at ?
-                            Math.round((new Date(job.finished_at) - new Date(job.started_at)) / 1000) + 's' : '-';
-                        return `
-                            <div class="job-item ${job.status} ${job.id === selectedJobId ? 'selected' : ''}"
-                                 onclick="showJobDetail('${job.id}')">
-                                <div class="job-header">
-                                    <span class="job-task">${job.task}</span>
-                                    <span class="status-badge ${job.status}">${job.status}</span>
-                                </div>
-                                <div class="job-meta">
-                                    <span><code>${job.id}</code></span>
-                                    <span>${job.node_id || 'local'}</span>
-                                    <span>${duration}</span>
-                                </div>
-                            </div>
-                        `;
-                    }).join('')}
-                </div>
-            `;
+        async function loadCliExecutions() {
+            try {
+                var res = await fetch('/api/v1/stats/executions?limit=100');
+                var data = await res.json();
+                var tbody = document.querySelector('#cli-table tbody');
 
-            // 自动选择第一个或 URL 指定的
-            if (selectedJobId && data.jobs.find(j => j.id === selectedJobId)) {
-                showJobDetail(selectedJobId);
-            } else if (data.jobs.length > 0 && !selectedJobId) {
-                showJobDetail(data.jobs[0].id);
+                if (!data.executions || data.executions.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无 CLI 上报记录</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = data.executions.map(function(exec) {
+                    var exitBadge = exec.exit_code === 0
+                        ? '<span class="status-badge success">0</span>'
+                        : '<span class="status-badge failed">' + exec.exit_code + '</span>';
+                    var timeStr = exec.timestamp
+                        ? new Date(exec.timestamp).toLocaleString('zh-CN')
+                        : (exec.created_at ? new Date(exec.created_at).toLocaleString('zh-CN') : '-');
+                    return '<tr>' +
+                        '<td><code>' + exec.id + '</code></td>' +
+                        '<td><strong>' + escapeHtml(exec.task) + '</strong></td>' +
+                        '<td>' + exitBadge + '</td>' +
+                        '<td>' + formatDurationSec(exec.duration) + '</td>' +
+                        '<td>' + escapeHtml(exec.host || '-') + '</td>' +
+                        '<td>' + timeStr + '</td>' +
+                        '</tr>';
+                }).join('');
+            } catch (e) {
+                document.querySelector('#cli-table tbody').innerHTML =
+                    '<tr><td colspan="6" class="empty">加载失败</td></tr>';
             }
         }
 
         async function showJobDetail(jobId) {
             selectedJobId = jobId;
-            history.replaceState(null, '', `?id=${jobId}`);
+            history.replaceState(null, '', '?id=' + jobId);
 
-            // 更新选中状态
-            document.querySelectorAll('.job-item').forEach(el => {
-                el.classList.toggle('selected', el.onclick.toString().includes(jobId));
+            // 高亮行
+            document.querySelectorAll('#jobs-table tbody tr').forEach(function(tr) {
+                tr.classList.remove('selected-row');
+            });
+            document.querySelectorAll('#jobs-table tbody tr').forEach(function(tr) {
+                var codeEl = tr.querySelector('code');
+                if (codeEl && codeEl.textContent === jobId) {
+                    tr.classList.add('selected-row');
+                }
             });
 
-            const res = await fetch(`/api/v1/jobs/${jobId}`);
-            const job = await res.json();
+            try {
+                var res = await fetch('/api/v1/jobs/' + encodeURIComponent(jobId));
+                var job = await res.json();
 
-            const container = document.getElementById('job-detail');
-            container.innerHTML = `
-                <div class="detail-header">
-                    <h3>${job.task}</h3>
-                    <span class="status-badge ${job.status}">${job.status}</span>
-                </div>
+                if (job.error) {
+                    document.getElementById('job-detail-body').innerHTML =
+                        '<div class="empty">' + escapeHtml(job.error) + '</div>';
+                    document.getElementById('job-detail-panel').style.display = 'block';
+                    return;
+                }
 
-                <div class="detail-info">
-                    <div class="info-row">
-                        <span class="label">Job ID</span>
-                        <span class="value"><code>${job.id}</code></span>
-                    </div>
-                    <div class="info-row">
-                        <span class="label">Node</span>
-                        <span class="value">${job.node_id || 'local'}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="label">Exit Code</span>
-                        <span class="value">${job.exit_code !== undefined ? job.exit_code : '-'}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="label">Started</span>
-                        <span class="value">${job.started_at ? new Date(job.started_at).toLocaleString() : '-'}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="label">Finished</span>
-                        <span class="value">${job.finished_at ? new Date(job.finished_at).toLocaleString() : '-'}</span>
-                    </div>
-                    ${Object.keys(job.vars || {}).length > 0 ? `
-                    <div class="info-row">
-                        <span class="label">Variables</span>
-                        <span class="value"><code>${JSON.stringify(job.vars)}</code></span>
-                    </div>
-                    ` : ''}
-                </div>
+                var duration = formatDuration(job.started_at, job.finished_at);
+                var html = '<div class="detail-grid">' +
+                    '<div class="detail-field"><span class="detail-label">任务 ID</span><code>' + escapeHtml(job.id) + '</code></div>' +
+                    '<div class="detail-field"><span class="detail-label">任务名称</span><strong>' + escapeHtml(job.task) + '</strong></div>' +
+                    '<div class="detail-field"><span class="detail-label">节点</span><span>' + escapeHtml(job.node_id || '本地') + '</span></div>' +
+                    '<div class="detail-field"><span class="detail-label">状态</span><span class="status-badge ' + escapeHtml(job.status) + '">' +
+                    (statusLabels[job.status] || job.status) + '</span></div>' +
+                    '<div class="detail-field"><span class="detail-label">退出码</span><span>' +
+                    (job.exit_code !== undefined && job.exit_code !== null ? job.exit_code : '-') + '</span></div>' +
+                    '<div class="detail-field"><span class="detail-label">耗时</span><span>' + duration + '</span></div>' +
+                    '<div class="detail-field"><span class="detail-label">开始时间</span><span>' +
+                    (job.started_at ? new Date(job.started_at).toLocaleString('zh-CN') : '-') + '</span></div>' +
+                    '<div class="detail-field"><span class="detail-label">结束时间</span><span>' +
+                    (job.finished_at ? new Date(job.finished_at).toLocaleString('zh-CN') : '-') + '</span></div>';
 
-                <div class="detail-logs">
-                    <h4>Logs</h4>
-                    <pre class="logs-box">${job.logs || '(no output)'}</pre>
-                </div>
+                if (job.vars && Object.keys(job.vars).length > 0) {
+                    html += '<div class="detail-field" style="grid-column:1/-1;"><span class="detail-label">参数</span><code>' +
+                        escapeHtml(JSON.stringify(job.vars, null, 2)) + '</code></div>';
+                }
 
-                ${['pending', 'running'].includes(job.status) ? `
-                <div class="detail-actions">
-                    <button class="btn btn-danger" onclick="cancelJob('${job.id}')">Cancel</button>
-                </div>
-                ` : ''}
-            `;
+                html += '</div>';
 
-            // 如果正在运行，订阅日志更新
-            if (['pending', 'running'].includes(job.status)) {
-                subscribeToLogs(jobId);
+                // 日志
+                html += '<div style="margin-top:1rem;">' +
+                    '<h3 style="font-size:0.9rem; color:var(--text-muted); margin-bottom:0.5rem;">执行日志</h3>' +
+                    '<pre class="details-box" id="logs-box">' + escapeHtml(job.logs || '(无输出)') + '</pre>' +
+                    '</div>';
+
+                document.getElementById('detail-title').textContent = '任务详情: ' + job.task;
+                document.getElementById('job-detail-body').innerHTML = html;
+                document.getElementById('job-detail-panel').style.display = 'block';
+
+                // 滚动到详情
+                document.getElementById('job-detail-panel').scrollIntoView({behavior: 'smooth'});
+
+                // 如果正在运行, 订阅日志
+                if (job.status === 'pending' || job.status === 'running') {
+                    subscribeToLogs(jobId);
+                }
+            } catch (e) {
+                console.error('加载任务详情失败:', e);
             }
         }
 
         function subscribeToLogs(jobId) {
-            const evtSource = new EventSource(`/api/v1/jobs/${jobId}/logs`);
-            evtSource.onmessage = (event) => {
-                const data = JSON.parse(event.data);
+            var evtSource = new EventSource('/api/v1/jobs/' + encodeURIComponent(jobId) + '/logs');
+            evtSource.onmessage = function(event) {
+                var data = JSON.parse(event.data);
                 if (data.logs) {
-                    const logsBox = document.querySelector('.logs-box');
+                    var logsBox = document.getElementById('logs-box');
                     if (logsBox) {
                         logsBox.textContent += data.logs;
                         logsBox.scrollTop = logsBox.scrollHeight;
@@ -169,18 +296,32 @@
                     loadJobs();
                 }
             };
+            evtSource.onerror = function() {
+                evtSource.close();
+            };
         }
 
         async function cancelJob(jobId) {
-            if (!confirm('Cancel this job?')) return;
-            await fetch(`/api/v1/jobs/${jobId}/cancel`, {method: 'POST'});
-            loadJobs();
+            if (!confirm('确定取消此任务?')) return;
+            try {
+                await fetch('/api/v1/jobs/' + encodeURIComponent(jobId) + '/cancel', {method: 'POST'});
+                loadJobs();
+            } catch (e) {
+                alert('取消失败: ' + e.message);
+            }
         }
 
-        socket.on('job_update', loadJobs);
-        socket.on('job_log_update', (data) => {
+        function closeDetail() {
+            document.getElementById('job-detail-panel').style.display = 'none';
+            selectedJobId = null;
+            history.replaceState(null, '', '/jobs');
+        }
+
+        // WebSocket 实时更新
+        socket.on('job_update', function() { loadJobs(); });
+        socket.on('job_log_update', function(data) {
             if (data.job_id === selectedJobId) {
-                const logsBox = document.querySelector('.logs-box');
+                var logsBox = document.getElementById('logs-box');
                 if (logsBox) {
                     logsBox.textContent += data.log + '\n';
                     logsBox.scrollTop = logsBox.scrollHeight;
@@ -188,99 +329,69 @@
             }
         });
 
+        // 初始加载
         loadJobs();
     </script>
 
     <style>
-        .page-header { margin-bottom: 2rem; }
-        .page-header h1 { margin-bottom: 0.5rem; }
-        .page-header p { color: var(--text-muted); }
-
-        .jobs-layout {
-            display: grid;
-            grid-template-columns: 400px 1fr;
-            gap: 1.5rem;
+        .tabs {
+            display: flex;
+            gap: 0;
+            margin-bottom: 1.2rem;
+            border-bottom: 2px solid var(--border);
         }
 
-        .job-items {
-            max-height: 70vh;
-            overflow-y: auto;
-        }
-
-        .job-item {
-            padding: 1rem;
-            background: rgba(255,255,255,0.03);
-            border-radius: 4px;
-            margin-bottom: 0.5rem;
+        .tab {
+            padding: 0.6rem 1.5rem;
+            border: none;
+            background: none;
             cursor: pointer;
-            border-left: 3px solid var(--text-muted);
+            font-size: 0.95rem;
+            color: var(--text-muted);
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
             transition: all 0.2s;
         }
 
-        .job-item:hover { background: rgba(255,255,255,0.06); }
-        .job-item.selected { background: rgba(255,255,255,0.08); }
-        .job-item.success { border-left-color: var(--success); }
-        .job-item.failed, .job-item.error { border-left-color: var(--danger); }
-        .job-item.running { border-left-color: var(--info); }
-        .job-item.pending { border-left-color: var(--warning); }
-
-        .job-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 0.5rem;
+        .tab:hover {
+            color: var(--primary);
         }
 
-        .job-task { font-weight: bold; }
+        .tab.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+            font-weight: 500;
+        }
 
-        .job-meta {
+        .selected-row {
+            background: var(--primary-light) !important;
+        }
+
+        .detail-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 0.8rem;
+        }
+
+        .detail-field {
             display: flex;
-            gap: 1rem;
-            font-size: 0.85rem;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .detail-label {
+            font-size: 0.8rem;
             color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
         }
 
-        .detail-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1.5rem;
-        }
-
-        .detail-header h3 { margin: 0; }
-
-        .detail-info { margin-bottom: 1.5rem; }
-
-        .info-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 0.5rem 0;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-        }
-
-        .info-row .label { color: var(--text-muted); }
-        .info-row .value code { background: rgba(255,255,255,0.1); padding: 0.2rem 0.5rem; border-radius: 3px; }
-
-        .detail-logs h4 { margin-bottom: 0.5rem; color: var(--text-muted); }
-
-        .logs-box {
-            background: rgba(0,0,0,0.4);
-            padding: 1rem;
-            border-radius: 4px;
-            max-height: 400px;
-            overflow: auto;
-            font-family: monospace;
-            font-size: 0.85rem;
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
-
-        .detail-actions { margin-top: 1rem; }
-        .btn-danger { background: var(--danger); color: white; }
-        .btn-danger:hover { background: #c0392b; }
-
-        @media (max-width: 1024px) {
-            .jobs-layout { grid-template-columns: 1fr; }
+        .detail-field code {
+            background: var(--bg-color);
+            padding: 0.15rem 0.4rem;
+            border-radius: 3px;
+            font-size: 0.82rem;
+            color: var(--primary);
         }
     </style>
 </body>

@@ -1,0 +1,40 @@
+name: server
+desc: "EZ Server Web 管理平台"
+tool: true
+tasks:
+  default:
+    desc: "启动 EZ Server"
+    cmds:
+      - cmd: |
+          export EZ_HTTP_PORT="${EZ_PORT:-8080}"
+          export EZ_SERVER_TOKEN="${EZ_TOKEN:-}"
+          python3 -m server.main
+    ez-params:
+      - name: "port"
+        type: "input"
+        default: "8080"
+        help: "HTTP 端口"
+      - name: "token"
+        type: "input"
+        default: ""
+        help: "API 认证令牌 (空=无认证)"
+  docker:
+    desc: "Docker 容器管理"
+    cmds:
+      - cmd: |
+          cd "$EZ_ROOT"
+          docker compose -f server/docker-compose.yml $EZ_ACTION
+    ez-params:
+      - name: "action"
+        type: "select"
+        options: ["up -d", "down", "logs -f", "build"]
+        default: "up -d"
+        help: "Docker 操作"
+  status:
+    desc: "检查 Server 运行环境"
+    cmds:
+      - cmd: |
+          echo "Server 依赖:"
+          command -v python3 &>/dev/null && echo "  ✓ Python3: $(python3 --version 2>&1)" || echo "  ✗ Python3: 未安装"
+          python3 -c "import flask" 2>/dev/null && echo "  ✓ Flask: 已安装" || echo "  ○ Flask: 未安装 (pip3 install flask)"
+          command -v docker &>/dev/null && echo "  ✓ Docker: 可用" || echo "  ○ Docker: 未安装 (可选)"

@@ -3,454 +3,484 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Charts - EZ Dashboard</title>
+    <title>统计 - EZ 管理平台</title>
     <link rel="stylesheet" href="/static/css/style.css">
+    <script src="/static/js/socket.io.min.js"></script>
     <script src="/static/js/chart.min.js"></script>
 </head>
 <body>
     <nav class="navbar">
-        <div class="nav-brand">EZ Dashboard</div>
+        <div class="nav-brand">EZ 管理平台</div>
         <div class="nav-links">
-            <a href="/">Overview</a>
-            <a href="/nodes">Nodes</a>
-            <a href="/tasks">Tasks</a>
-            <a href="/jobs">Jobs</a>
-            <a href="/charts" class="active">Charts</a>
+            <a href="/">总览</a>
+            <a href="/tasks">任务</a>
+            <a href="/plans">计划</a>
+            <a href="/jobs">执行记录</a>
+            <a href="/nodes">节点</a>
+            <a href="/charts" class="active">统计</a>
         </div>
     </nav>
 
     <main class="container">
         <div class="page-header">
-            <h1>Charts</h1>
-            <p>Data visualization &amp; custom formulas</p>
+            <h1>数据统计</h1>
+            <p>可视化执行趋势与任务分析</p>
         </div>
 
-        <!-- 内置概览图表 -->
-        <div class="charts-grid">
-            <div class="card">
-                <h2>Success Rate</h2>
-                <canvas id="chart-status"></canvas>
+        <!-- 时间范围选择器 -->
+        <div class="time-range">
+            <button class="active" onclick="setRange(1, this)">24小时</button>
+            <button onclick="setRange(7, this)">7天</button>
+            <button onclick="setRange(30, this)">30天</button>
+        </div>
+
+        <!-- 统计概览卡片 -->
+        <div class="stat-grid" style="margin-bottom:1.5rem;">
+            <div class="stat-card primary">
+                <div class="stat-value" id="s-total">-</div>
+                <div class="stat-label">总执行</div>
             </div>
-            <div class="card">
-                <h2>Timeline</h2>
-                <canvas id="chart-timeline"></canvas>
+            <div class="stat-card success">
+                <div class="stat-value" id="s-success">-</div>
+                <div class="stat-label">成功</div>
             </div>
-            <div class="card">
-                <h2>By Task</h2>
-                <canvas id="chart-tasks"></canvas>
+            <div class="stat-card danger">
+                <div class="stat-value" id="s-failed">-</div>
+                <div class="stat-label">失败</div>
             </div>
-            <div class="card">
-                <h2>By Node</h2>
-                <canvas id="chart-nodes"></canvas>
+            <div class="stat-card warning">
+                <div class="stat-value" id="s-rate">-</div>
+                <div class="stat-label">成功率</div>
             </div>
         </div>
 
-        <!-- 自定义图表编辑器 -->
-        <div class="card editor-card">
-            <h2>Custom Chart</h2>
-            <div class="editor-layout">
-                <div class="editor-left">
-                    <div class="editor-toolbar">
-                        <div class="form-group-inline">
-                            <label>Type</label>
-                            <select id="chart-type">
-                                <option value="bar">Bar</option>
-                                <option value="line">Line</option>
-                                <option value="pie">Pie</option>
-                                <option value="doughnut">Doughnut</option>
-                            </select>
-                        </div>
-                        <div class="form-group-inline">
-                            <label>Name</label>
-                            <input type="text" id="chart-name" placeholder="My Chart">
-                        </div>
-                        <div class="form-group-inline">
-                            <label>Presets</label>
-                            <select id="preset-select" onchange="loadPreset(this.value)">
-                                <option value="">-- select --</option>
-                                <option value="success-rate">Success Rate (pie)</option>
-                                <option value="timeline">Daily Trend (line)</option>
-                                <option value="task-count">Task Count (bar)</option>
-                                <option value="duration">Duration P50/P90 (bar)</option>
-                            </select>
-                        </div>
-                    </div>
-                    <textarea id="formula-editor" spellcheck="false" placeholder="// Input: stats (from /api/v1/stats)
-// Output: { labels: [...], datasets: [{ label, data, ... }] }
-
-return {
-  labels: stats.by_task.map(t => t.task),
-  datasets: [{
-    label: 'Total',
-    data: stats.by_task.map(t => t.total),
-    backgroundColor: '#3498db'
-  }]
-}"></textarea>
-                    <div class="editor-actions">
-                        <button class="btn btn-primary" onclick="renderCustomChart()">Render</button>
-                        <button class="btn" onclick="saveChart()">Save</button>
-                        <span id="editor-msg" class="editor-msg"></span>
-                    </div>
-                </div>
-                <div class="editor-right">
-                    <canvas id="chart-custom"></canvas>
-                    <div id="custom-empty" class="empty">Click "Render" to preview</div>
+        <!-- 2x2 图表网格 -->
+        <div class="chart-grid">
+            <!-- 1. 执行趋势 -->
+            <div class="chart-card">
+                <h3>执行趋势</h3>
+                <div class="chart-wrapper">
+                    <canvas id="chart-trend"></canvas>
                 </div>
             </div>
-        </div>
 
-        <!-- 已保存图表 -->
-        <div class="card" id="saved-charts-card" style="display:none">
-            <h2>Saved Charts</h2>
-            <div id="saved-charts" class="saved-grid"></div>
+            <!-- 2. 任务分布 -->
+            <div class="chart-card">
+                <h3>任务分布</h3>
+                <div class="chart-wrapper">
+                    <canvas id="chart-dist"></canvas>
+                </div>
+            </div>
+
+            <!-- 3. 耗时分析 -->
+            <div class="chart-card">
+                <h3>耗时分析</h3>
+                <div class="chart-wrapper">
+                    <canvas id="chart-duration"></canvas>
+                </div>
+            </div>
+
+            <!-- 4. 成功率 -->
+            <div class="chart-card">
+                <h3>任务成功率</h3>
+                <div class="chart-wrapper">
+                    <canvas id="chart-success-rate"></canvas>
+                </div>
+            </div>
         </div>
     </main>
 
     <script>
-        let statsData = null;
-        let customChart = null;
-        const builtinCharts = {};
+        var charts = {};
+        var statsData = null;
+        var currentRange = 30; // 默认 30 天
 
-        const COLORS = {
-            success: '#2ecc71', failed: '#e74c3c', error: '#f39c12',
-            pending: '#f1c40f', running: '#3498db', cancelled: '#95a5a6',
-            timeout: '#e67e22', unknown: '#888'
-        };
+        function setRange(days, btn) {
+            currentRange = days;
+            document.querySelectorAll('.time-range button').forEach(function(b) {
+                b.classList.remove('active');
+            });
+            if (btn) btn.classList.add('active');
+            loadStats();
+        }
 
-        const CHART_DEFAULTS = {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { labels: { color: '#eee' } }
-            },
-            scales: {
-                x: { ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-                y: { ticks: { color: '#888' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+        function filterByRange(data) {
+            if (!data) return data;
+            var cutoff = new Date();
+            cutoff.setDate(cutoff.getDate() - currentRange);
+            var cutoffStr = cutoff.toISOString().slice(0, 10);
+
+            // 过滤 timeline
+            var filtered = Object.assign({}, data);
+            if (filtered.timeline) {
+                filtered.timeline = filtered.timeline.filter(function(d) {
+                    return d.date >= cutoffStr;
+                });
             }
-        };
 
-        // 预置公式
-        const PRESETS = {
-            'success-rate': {
-                type: 'doughnut',
-                formula: `return {
-  labels: ['Success', 'Failed', 'Error', 'Other'],
-  datasets: [{
-    data: [
-      stats.summary.success,
-      stats.summary.failed,
-      stats.summary.error,
-      stats.summary.total_jobs - stats.summary.success - stats.summary.failed - stats.summary.error
-    ],
-    backgroundColor: ['#2ecc71', '#e74c3c', '#f39c12', '#888']
-  }]
-}`
-            },
-            'timeline': {
-                type: 'line',
-                formula: `return {
-  labels: stats.timeline.map(d => d.date),
-  datasets: [
-    { label: 'Success', data: stats.timeline.map(d => d.success), borderColor: '#2ecc71', fill: false },
-    { label: 'Failed', data: stats.timeline.map(d => d.failed), borderColor: '#e74c3c', fill: false }
-  ]
-}`
-            },
-            'task-count': {
-                type: 'bar',
-                formula: `return {
-  labels: stats.by_task.map(t => t.task),
-  datasets: [
-    { label: 'Success', data: stats.by_task.map(t => t.success), backgroundColor: '#2ecc71' },
-    { label: 'Failed', data: stats.by_task.map(t => t.failed), backgroundColor: '#e74c3c' }
-  ]
-}`
-            },
-            'duration': {
-                type: 'bar',
-                formula: `return {
-  labels: ['Avg', 'Min', 'Max', 'P50', 'P90'],
-  datasets: [{
-    label: 'Duration (s)',
-    data: [stats.duration.avg, stats.duration.min, stats.duration.max, stats.duration.p50, stats.duration.p90],
-    backgroundColor: ['#3498db', '#2ecc71', '#e74c3c', '#f39c12', '#9b59b6']
-  }]
-}`
+            // 重新计算 summary 基于 raw_jobs
+            if (filtered.raw_jobs) {
+                var jobs = filtered.raw_jobs.filter(function(j) {
+                    var d = (j.created_at || '').slice(0, 10);
+                    return d >= cutoffStr;
+                });
+
+                var total = jobs.length;
+                var success = 0, failed = 0;
+                var taskMap = {};
+
+                jobs.forEach(function(j) {
+                    if (j.status === 'success') success++;
+                    if (j.status === 'failed' || j.status === 'error') failed++;
+
+                    var t = j.task || 'unknown';
+                    if (!taskMap[t]) taskMap[t] = {task: t, total: 0, success: 0, failed: 0, durations: []};
+                    taskMap[t].total++;
+                    if (j.status === 'success') taskMap[t].success++;
+                    if (j.status === 'failed' || j.status === 'error') taskMap[t].failed++;
+
+                    if (j.started_at && j.finished_at) {
+                        var dur = (new Date(j.finished_at) - new Date(j.started_at)) / 1000;
+                        if (dur >= 0) taskMap[t].durations.push(dur);
+                    }
+                });
+
+                filtered.summary = {
+                    total_jobs: total,
+                    success: success,
+                    failed: failed,
+                    success_rate: total > 0 ? Math.round(success / total * 1000) / 10 : 0
+                };
+
+                filtered.by_task = Object.values(taskMap);
             }
-        };
 
-        function loadPreset(key) {
-            if (!key || !PRESETS[key]) return;
-            const p = PRESETS[key];
-            document.getElementById('chart-type').value = p.type;
-            document.getElementById('formula-editor').value = p.formula;
-            document.getElementById('preset-select').value = '';
-            renderCustomChart();
+            return filtered;
         }
 
         async function loadStats() {
             try {
-                const res = await fetch('/api/v1/stats');
+                var res = await fetch('/api/v1/stats');
                 statsData = await res.json();
-                renderBuiltinCharts();
+                var data = filterByRange(statsData);
+                updateSummary(data);
+                renderCharts(data);
             } catch (e) {
-                console.error('Failed to load stats:', e);
+                console.error('加载统计失败:', e);
             }
         }
 
-        function makeChart(canvasId, type, data, extraOpts) {
-            const ctx = document.getElementById(canvasId);
-            if (builtinCharts[canvasId]) builtinCharts[canvasId].destroy();
-
-            const isPie = type === 'pie' || type === 'doughnut';
-            const opts = JSON.parse(JSON.stringify(CHART_DEFAULTS));
-            if (isPie) { delete opts.scales; }
-            Object.assign(opts, extraOpts || {});
-
-            builtinCharts[canvasId] = new Chart(ctx, { type, data, options: opts });
+        function updateSummary(data) {
+            if (!data || !data.summary) return;
+            var s = data.summary;
+            document.getElementById('s-total').textContent = s.total_jobs;
+            document.getElementById('s-success').textContent = s.success;
+            document.getElementById('s-failed').textContent = s.failed;
+            document.getElementById('s-rate').textContent = s.success_rate + '%';
         }
 
-        function renderBuiltinCharts() {
-            if (!statsData) return;
-            const s = statsData;
-
-            // Status doughnut
-            makeChart('chart-status', 'doughnut', {
-                labels: s.by_status.map(x => x.status),
-                datasets: [{
-                    data: s.by_status.map(x => x.count),
-                    backgroundColor: s.by_status.map(x => COLORS[x.status] || '#888')
-                }]
-            });
-
-            // Timeline
-            if (s.timeline.length > 0) {
-                makeChart('chart-timeline', 'line', {
-                    labels: s.timeline.map(d => d.date),
-                    datasets: [
-                        { label: 'Success', data: s.timeline.map(d => d.success), borderColor: '#2ecc71', fill: false, tension: 0.3 },
-                        { label: 'Failed', data: s.timeline.map(d => d.failed), borderColor: '#e74c3c', fill: false, tension: 0.3 }
-                    ]
-                });
+        function createOrUpdate(canvasId, config) {
+            if (charts[canvasId]) {
+                charts[canvasId].destroy();
             }
-
-            // By task
-            if (s.by_task.length > 0) {
-                makeChart('chart-tasks', 'bar', {
-                    labels: s.by_task.map(t => t.task),
-                    datasets: [
-                        { label: 'Success', data: s.by_task.map(t => t.success), backgroundColor: '#2ecc71' },
-                        { label: 'Failed', data: s.by_task.map(t => t.failed), backgroundColor: '#e74c3c' }
-                    ]
-                });
-            }
-
-            // By node
-            if (s.by_node.length > 0) {
-                makeChart('chart-nodes', 'bar', {
-                    labels: s.by_node.map(n => n.node),
-                    datasets: [
-                        { label: 'Success', data: s.by_node.map(n => n.success), backgroundColor: '#2ecc71' },
-                        { label: 'Failed', data: s.by_node.map(n => n.failed), backgroundColor: '#e74c3c' }
-                    ]
-                });
-            }
+            var ctx = document.getElementById(canvasId).getContext('2d');
+            charts[canvasId] = new Chart(ctx, config);
         }
 
-        function renderCustomChart() {
-            if (!statsData) { showMsg('No data loaded yet', true); return; }
+        function renderCharts(data) {
+            if (!data) return;
+            renderTrendChart(data);
+            renderDistChart(data);
+            renderDurationChart(data);
+            renderSuccessRateChart(data);
+        }
 
-            const formula = document.getElementById('formula-editor').value.trim();
-            const type = document.getElementById('chart-type').value;
-            if (!formula) { showMsg('Formula is empty', true); return; }
+        // 1. 执行趋势 - 折线图
+        function renderTrendChart(data) {
+            var timeline = data.timeline || [];
+            if (timeline.length === 0) {
+                timeline = [{date: new Date().toISOString().slice(0, 10), total: 0, success: 0, failed: 0}];
+            }
 
-            try {
-                const fn = new Function('stats', formula);
-                const data = fn(statsData);
+            var ctx = document.getElementById('chart-trend').getContext('2d');
 
-                if (!data || !data.datasets) {
-                    showMsg('Formula must return {labels, datasets}', true);
-                    return;
+            // 渐变填充
+            var gradientTotal = ctx.createLinearGradient(0, 0, 0, 260);
+            gradientTotal.addColorStop(0, 'rgba(22, 119, 255, 0.3)');
+            gradientTotal.addColorStop(1, 'rgba(22, 119, 255, 0.02)');
+
+            var gradientSuccess = ctx.createLinearGradient(0, 0, 0, 260);
+            gradientSuccess.addColorStop(0, 'rgba(82, 196, 26, 0.25)');
+            gradientSuccess.addColorStop(1, 'rgba(82, 196, 26, 0.02)');
+
+            createOrUpdate('chart-trend', {
+                type: 'line',
+                data: {
+                    labels: timeline.map(function(d) { return d.date; }),
+                    datasets: [
+                        {
+                            label: '总执行',
+                            data: timeline.map(function(d) { return d.total; }),
+                            borderColor: '#1677ff',
+                            backgroundColor: gradientTotal,
+                            fill: true,
+                            tension: 0.4,
+                            borderWidth: 2,
+                            pointRadius: 3,
+                            pointHoverRadius: 6
+                        },
+                        {
+                            label: '成功',
+                            data: timeline.map(function(d) { return d.success; }),
+                            borderColor: '#52c41a',
+                            backgroundColor: gradientSuccess,
+                            fill: true,
+                            tension: 0.4,
+                            borderWidth: 2,
+                            pointRadius: 3,
+                            pointHoverRadius: 6
+                        },
+                        {
+                            label: '失败',
+                            data: timeline.map(function(d) { return d.failed; }),
+                            borderColor: '#ff4d4f',
+                            backgroundColor: 'rgba(255, 77, 79, 0.08)',
+                            fill: true,
+                            tension: 0.4,
+                            borderWidth: 2,
+                            pointRadius: 3,
+                            pointHoverRadius: 6
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: { duration: 800, easing: 'easeInOutQuart' },
+                    plugins: {
+                        legend: { labels: { usePointStyle: true, padding: 16, font: { size: 12 } } }
+                    },
+                    scales: {
+                        x: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { font: { size: 11 } } },
+                        y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { font: { size: 11 } } }
+                    }
                 }
-
-                const canvas = document.getElementById('chart-custom');
-                if (customChart) customChart.destroy();
-
-                const isPie = type === 'pie' || type === 'doughnut';
-                const opts = JSON.parse(JSON.stringify(CHART_DEFAULTS));
-                if (isPie) delete opts.scales;
-
-                customChart = new Chart(canvas, { type, data, options: opts });
-                document.getElementById('custom-empty').style.display = 'none';
-                canvas.style.display = 'block';
-                showMsg('OK');
-            } catch (e) {
-                showMsg('Error: ' + e.message, true);
-            }
-        }
-
-        function showMsg(text, isError) {
-            const el = document.getElementById('editor-msg');
-            el.textContent = text;
-            el.style.color = isError ? '#e74c3c' : '#2ecc71';
-            setTimeout(() => { el.textContent = ''; }, 4000);
-        }
-
-        async function saveChart() {
-            const name = document.getElementById('chart-name').value.trim();
-            const type = document.getElementById('chart-type').value;
-            const formula = document.getElementById('formula-editor').value.trim();
-            if (!name) { showMsg('Enter a chart name', true); return; }
-            if (!formula) { showMsg('Formula is empty', true); return; }
-
-            const res = await fetch('/api/v1/charts', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ name, type, formula })
             });
-            const data = await res.json();
-            if (data.id) {
-                showMsg('Saved: ' + data.id);
-                loadSavedCharts();
-            } else {
-                showMsg(data.error || 'Save failed', true);
-            }
         }
 
-        async function loadSavedCharts() {
-            const res = await fetch('/api/v1/charts');
-            const data = await res.json();
-            const container = document.getElementById('saved-charts');
-            const card = document.getElementById('saved-charts-card');
+        // 2. 任务分布 - 环形图
+        function renderDistChart(data) {
+            var tasks = data.by_task || [];
+            if (tasks.length === 0) {
+                tasks = [{task: '暂无数据', total: 1}];
+            }
 
-            if (!data.charts || data.charts.length === 0) {
-                card.style.display = 'none';
+            // 调色板
+            var palette = [
+                '#1677ff', '#52c41a', '#faad14', '#ff4d4f', '#722ed1',
+                '#13c2c2', '#eb2f96', '#fa8c16', '#2f54eb', '#a0d911',
+                '#597ef7', '#36cfc9', '#f759ab', '#ffc53d'
+            ];
+
+            createOrUpdate('chart-dist', {
+                type: 'doughnut',
+                data: {
+                    labels: tasks.map(function(t) { return t.task; }),
+                    datasets: [{
+                        data: tasks.map(function(t) { return t.total; }),
+                        backgroundColor: tasks.map(function(_, i) { return palette[i % palette.length]; }),
+                        borderWidth: 2,
+                        borderColor: '#ffffff',
+                        hoverBorderWidth: 3,
+                        hoverOffset: 8
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: { duration: 800, easing: 'easeOutBounce', animateRotate: true },
+                    cutout: '55%',
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: { usePointStyle: true, padding: 12, font: { size: 11 } }
+                        }
+                    }
+                }
+            });
+        }
+
+        // 3. 耗时分析 - 柱状图 (渐变)
+        function renderDurationChart(data) {
+            var tasks = (data.by_task || []).filter(function(t) {
+                return t.durations && t.durations.length > 0;
+            });
+
+            // 如果按 range 过滤后没有 durations, 使用全局 duration 数据
+            if (tasks.length === 0 && data.duration) {
+                var ctx = document.getElementById('chart-duration').getContext('2d');
+                var gradient = ctx.createLinearGradient(0, 260, 0, 0);
+                gradient.addColorStop(0, 'rgba(22, 119, 255, 0.2)');
+                gradient.addColorStop(1, 'rgba(22, 119, 255, 0.8)');
+
+                createOrUpdate('chart-duration', {
+                    type: 'bar',
+                    data: {
+                        labels: ['平均', '最小', '最大', 'P50', 'P90'],
+                        datasets: [{
+                            label: '耗时 (秒)',
+                            data: [data.duration.avg, data.duration.min, data.duration.max,
+                                   data.duration.p50, data.duration.p90],
+                            backgroundColor: gradient,
+                            borderColor: '#1677ff',
+                            borderWidth: 1,
+                            borderRadius: 4,
+                            borderSkipped: false
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: { duration: 800, easing: 'easeInOutQuart' },
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+                            y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.04)' },
+                                 ticks: { font: { size: 11 }, callback: function(v) { return v + 's'; } } }
+                        }
+                    }
+                });
                 return;
             }
 
-            card.style.display = 'block';
-            container.innerHTML = data.charts.map(c => `
-                <div class="saved-chart-item">
-                    <div class="saved-info">
-                        <strong>${c.name}</strong>
-                        <span class="tag">${c.type}</span>
-                    </div>
-                    <div class="saved-actions">
-                        <button class="btn btn-sm" onclick="loadChart('${c.id}', ${JSON.stringify(JSON.stringify(c.formula))}, '${c.type}', ${JSON.stringify(JSON.stringify(c.name))})">Load</button>
-                        <button class="btn btn-sm btn-danger" onclick="deleteChart('${c.id}')">Delete</button>
-                    </div>
-                </div>
-            `).join('');
+            // 计算每个任务的平均耗时
+            var labels = [];
+            var avgDurations = [];
+            tasks.forEach(function(t) {
+                labels.push(t.task);
+                var sum = t.durations.reduce(function(a, b) { return a + b; }, 0);
+                avgDurations.push(Math.round(sum / t.durations.length * 10) / 10);
+            });
+
+            var ctx = document.getElementById('chart-duration').getContext('2d');
+            var gradient = ctx.createLinearGradient(0, 260, 0, 0);
+            gradient.addColorStop(0, 'rgba(114, 46, 209, 0.15)');
+            gradient.addColorStop(0.5, 'rgba(22, 119, 255, 0.5)');
+            gradient.addColorStop(1, 'rgba(19, 194, 194, 0.85)');
+
+            createOrUpdate('chart-duration', {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '平均耗时 (秒)',
+                        data: avgDurations,
+                        backgroundColor: gradient,
+                        borderColor: 'rgba(22, 119, 255, 0.6)',
+                        borderWidth: 1,
+                        borderRadius: 6,
+                        borderSkipped: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: { duration: 1000, easing: 'easeInOutQuart' },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function(ctx) { return '平均 ' + ctx.raw + ' 秒'; }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { font: { size: 11 }, maxRotation: 45 } },
+                        y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.04)' },
+                             ticks: { font: { size: 11 }, callback: function(v) { return v + 's'; } } }
+                    }
+                }
+            });
         }
 
-        function loadChart(id, formula, type, name) {
-            document.getElementById('formula-editor').value = JSON.parse(formula);
-            document.getElementById('chart-type').value = type;
-            document.getElementById('chart-name').value = JSON.parse(name);
-            renderCustomChart();
+        // 4. 成功率 - 柱状图
+        function renderSuccessRateChart(data) {
+            var tasks = (data.by_task || []).filter(function(t) { return t.total > 0; });
+            if (tasks.length === 0) {
+                tasks = [{task: '暂无数据', total: 1, success: 0}];
+            }
+
+            var labels = tasks.map(function(t) { return t.task; });
+            var rates = tasks.map(function(t) {
+                return t.total > 0 ? Math.round(t.success / t.total * 1000) / 10 : 0;
+            });
+
+            // 根据成功率着色
+            var colors = rates.map(function(r) {
+                if (r >= 90) return 'rgba(82, 196, 26, 0.75)';
+                if (r >= 70) return 'rgba(250, 173, 20, 0.75)';
+                return 'rgba(255, 77, 79, 0.75)';
+            });
+
+            var borderColors = rates.map(function(r) {
+                if (r >= 90) return '#52c41a';
+                if (r >= 70) return '#faad14';
+                return '#ff4d4f';
+            });
+
+            createOrUpdate('chart-success-rate', {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '成功率 (%)',
+                        data: rates,
+                        backgroundColor: colors,
+                        borderColor: borderColors,
+                        borderWidth: 1,
+                        borderRadius: 6,
+                        borderSkipped: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: { duration: 800, easing: 'easeInOutQuart' },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function(ctx) { return '成功率 ' + ctx.raw + '%'; }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: { grid: { display: false }, ticks: { font: { size: 11 }, maxRotation: 45 } },
+                        y: {
+                            beginAtZero: true, max: 100,
+                            grid: { color: 'rgba(0,0,0,0.04)' },
+                            ticks: { font: { size: 11 }, callback: function(v) { return v + '%'; } }
+                        }
+                    }
+                }
+            });
         }
 
-        async function deleteChart(id) {
-            if (!confirm('Delete this chart?')) return;
-            await fetch(`/api/v1/charts/${id}`, { method: 'DELETE' });
-            loadSavedCharts();
-        }
-
-        // Init
+        // 初始加载
         loadStats();
-        loadSavedCharts();
+
+        // 定时刷新
         setInterval(loadStats, 30000);
     </script>
 
     <style>
-        .page-header { margin-bottom: 2rem; }
-        .page-header h1 { margin-bottom: 0.5rem; }
-        .page-header p { color: var(--text-muted); }
-
-        .charts-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 1.5rem;
-            margin-bottom: 1.5rem;
-        }
-        .charts-grid canvas { max-height: 280px; }
-
-        .editor-card { margin-bottom: 1.5rem; }
-        .editor-layout {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 1.5rem;
-        }
-
-        .editor-toolbar {
-            display: flex;
-            gap: 1rem;
-            margin-bottom: 0.75rem;
-            flex-wrap: wrap;
-        }
-        .form-group-inline { display: flex; align-items: center; gap: 0.5rem; }
-        .form-group-inline label { font-size: 0.85rem; color: var(--text-muted); white-space: nowrap; }
-        .form-group-inline select,
-        .form-group-inline input {
-            padding: 0.4rem 0.6rem;
-            border: none;
-            border-radius: 4px;
-            background: rgba(255,255,255,0.1);
-            color: var(--text-color);
-            font-size: 0.9rem;
-        }
-
-        #formula-editor {
-            width: 100%;
-            min-height: 260px;
-            padding: 1rem;
-            border: none;
-            border-radius: 4px;
-            background: rgba(0,0,0,0.4);
-            color: #eee;
-            font-family: monospace;
-            font-size: 0.85rem;
-            resize: vertical;
-            tab-size: 2;
-        }
-
-        .editor-actions {
-            display: flex;
-            gap: 0.75rem;
-            align-items: center;
-            margin-top: 0.75rem;
-        }
-        .editor-msg { font-size: 0.85rem; }
-
-        .editor-right {
-            display: flex;
-            align-items: center;
-            justify-content: center;
+        .chart-wrapper {
             position: relative;
-            min-height: 300px;
+            height: 280px;
         }
-        .editor-right canvas { max-height: 340px; }
-        #custom-empty { position: absolute; }
 
-        .saved-grid { display: flex; flex-direction: column; gap: 0.5rem; }
-        .saved-chart-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0.75rem 1rem;
-            background: rgba(255,255,255,0.03);
-            border-radius: 4px;
-        }
-        .saved-info { display: flex; align-items: center; gap: 0.75rem; }
-        .saved-actions { display: flex; gap: 0.5rem; }
-        .btn-sm { padding: 0.3rem 0.8rem; font-size: 0.85rem; }
-        .btn-danger { background: var(--danger); color: white; }
-        .btn-danger:hover { background: #c0392b; }
-        .tag { background: var(--primary); padding: 0.2rem 0.5rem; border-radius: 3px; font-size: 0.8rem; }
-
-        @media (max-width: 1024px) {
-            .charts-grid { grid-template-columns: 1fr; }
-            .editor-layout { grid-template-columns: 1fr; }
+        .chart-wrapper canvas {
+            max-height: 280px;
         }
     </style>
 </body>

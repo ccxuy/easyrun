@@ -1,0 +1,23 @@
+name: stats-reporter
+type: hook
+desc: "任务执行统计上报到 Server"
+version: "1.0"
+trigger: post_run
+config:
+  server_url: "http://localhost:8080"
+  enabled: true
+script: |
+  #!/usr/bin/env bash
+  # 上报执行统计到 EZ Server (如果可达)
+  _EZ_SERVER="${EZ_SERVER_URL:-http://localhost:8080}"
+  curl -sf -X POST "$_EZ_SERVER/api/v1/stats/report" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"task\": \"${EZ_TASK_NAME:-unknown}\",
+      \"exit_code\": ${EZ_TASK_EXIT_CODE:-0},
+      \"duration\": ${EZ_TASK_DURATION:-0},
+      \"host\": \"$(hostname)\",
+      \"timestamp\": \"$(date -Iseconds)\",
+      \"workspace\": \"${EZ_WORKSPACE_NAME:-}\",
+      \"params\": \"${EZ_TASK_PARAMS:-}\"
+    }" 2>/dev/null || true

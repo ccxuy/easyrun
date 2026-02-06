@@ -3,101 +3,222 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Nodes - EZ Dashboard</title>
+    <title>节点 - EZ 管理平台</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <script src="/static/js/socket.io.min.js"></script>
 </head>
 <body>
     <nav class="navbar">
-        <div class="nav-brand">EZ Dashboard</div>
+        <div class="nav-brand">EZ 管理平台</div>
         <div class="nav-links">
-            <a href="/">Overview</a>
-            <a href="/nodes" class="active">Nodes</a>
-            <a href="/tasks">Tasks</a>
-            <a href="/jobs">Jobs</a>
-            <a href="/charts">Charts</a>
+            <a href="/">总览</a>
+            <a href="/tasks">任务</a>
+            <a href="/plans">计划</a>
+            <a href="/jobs">执行记录</a>
+            <a href="/nodes" class="active">节点</a>
+            <a href="/charts">统计</a>
         </div>
     </nav>
 
     <main class="container">
         <div class="page-header">
-            <h1>Nodes</h1>
-            <p>Connected worker nodes</p>
+            <h1>节点管理</h1>
+            <p>查看和管理连接的工作节点</p>
         </div>
 
-        <div id="nodes-container" class="card">
-            <div class="loading">Loading nodes...</div>
+        <div id="nodes-container">
+            <div class="loading">加载中...</div>
         </div>
     </main>
 
     <script>
-        const socket = io();
+        var socket = io();
+
+        var statusLabels = {
+            online: '在线', offline: '离线', busy: '繁忙'
+        };
+
+        function escapeHtml(str) {
+            var div = document.createElement('div');
+            div.textContent = str || '';
+            return div.innerHTML;
+        }
+
+        function formatTime(isoStr) {
+            if (!isoStr) return '-';
+            var d = new Date(isoStr);
+            var now = new Date();
+            var diffMs = now - d;
+            var diffSec = Math.floor(diffMs / 1000);
+            if (diffSec < 60) return diffSec + ' 秒前';
+            if (diffSec < 3600) return Math.floor(diffSec / 60) + ' 分钟前';
+            if (diffSec < 86400) return Math.floor(diffSec / 3600) + ' 小时前';
+            return d.toLocaleString('zh-CN');
+        }
 
         async function loadNodes() {
-            const res = await fetch('/api/v1/nodes');
-            const data = await res.json();
-            const container = document.getElementById('nodes-container');
+            try {
+                var res = await fetch('/api/v1/nodes');
+                var data = await res.json();
+                var container = document.getElementById('nodes-container');
 
-            if (data.nodes.length === 0) {
-                container.innerHTML = `
-                    <div class="empty-state">
-                        <h3>No Nodes Connected</h3>
-                        <p>Start a client agent to connect:</p>
-                        <code>python client/agent.py --server=http://this-server:8080 --name=my-node</code>
-                    </div>
-                `;
-                return;
+                if (!data.nodes || data.nodes.length === 0) {
+                    container.innerHTML = '<div class="card">' +
+                        '<div class="empty-state">' +
+                        '<div style="font-size:3rem; margin-bottom:1rem; opacity:0.3;">&#9881;</div>' +
+                        '<h3 style="margin-bottom:0.5rem; color:var(--text-color);">暂无节点</h3>' +
+                        '<p style="color:var(--text-muted); margin-bottom:1.5rem;">启动客户端代理以连接节点</p>' +
+                        '<div class="details-box" style="text-align:left; max-width:500px; margin:0 auto;">' +
+                        'python client/agent.py \\\n  --server=http://your-server:8080 \\\n  --name=my-node \\\n  --tags=linux,prod' +
+                        '</div>' +
+                        '</div>' +
+                        '</div>';
+                    return;
+                }
+
+                // 节点网格卡片
+                var html = '<div class="node-card-grid">';
+                data.nodes.forEach(function(node) {
+                    var statusIcon = node.status === 'online' ? '\u{1F7E2}' :
+                        (node.status === 'busy' ? '\u{1F7E1}' : '\u{1F534}');
+                    var tagsHtml = '';
+                    if (node.tags && node.tags.length > 0) {
+                        tagsHtml = '<div class="node-card-tags">' +
+                            node.tags.map(function(t) {
+                                return '<span class="tag-pill">' + escapeHtml(t) + '</span>';
+                            }).join('') + '</div>';
+                    }
+
+                    html += '<div class="card node-detail-card ' + escapeHtml(node.status) + '">' +
+                        '<div class="node-card-header">' +
+                        '<div class="node-card-name">' + statusIcon + ' ' + escapeHtml(node.name) + '</div>' +
+                        '<span class="status-badge ' + escapeHtml(node.status) + '">' +
+                        (statusLabels[node.status] || node.status) + '</span>' +
+                        '</div>' +
+                        '<div class="node-card-body">' +
+                        '<div class="node-info-row"><span class="node-info-label">ID</span><code>' + escapeHtml(node.id) + '</code></div>' +
+                        '<div class="node-info-row"><span class="node-info-label">最后心跳</span><span>' + formatTime(node.last_seen) + '</span></div>' +
+                        '<div class="node-info-row"><span class="node-info-label">当前任务</span><span>' +
+                        (node.current_job ? '<code>' + escapeHtml(node.current_job) + '</code>' : '空闲') + '</span></div>' +
+                        tagsHtml +
+                        '</div>' +
+                        '<div class="node-card-footer">' +
+                        '<button class="btn btn-sm btn-danger" onclick="removeNode(\'' + escapeHtml(node.id) + '\')">移除</button>' +
+                        '</div>' +
+                        '</div>';
+                });
+                html += '</div>';
+                container.innerHTML = html;
+            } catch (e) {
+                document.getElementById('nodes-container').innerHTML =
+                    '<div class="card"><div class="empty">加载失败: ' + escapeHtml(e.message) + '</div></div>';
             }
-
-            container.innerHTML = `
-                <table class="table">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Status</th>
-                            <th>Tags</th>
-                            <th>Last Seen</th>
-                            <th>Current Job</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${data.nodes.map(node => `
-                            <tr>
-                                <td><strong>${node.name}</strong><br><code>${node.id}</code></td>
-                                <td><span class="status-badge ${node.status}">${node.status}</span></td>
-                                <td>${node.tags.map(t => `<span class="tag">${t}</span>`).join(' ') || '-'}</td>
-                                <td>${node.last_seen ? new Date(node.last_seen).toLocaleString() : '-'}</td>
-                                <td>${node.current_job ? `<code>${node.current_job}</code>` : '-'}</td>
-                                <td>
-                                    <button class="btn btn-sm" onclick="removeNode('${node.id}')">Remove</button>
-                                </td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
-            `;
         }
 
         async function removeNode(nodeId) {
-            if (!confirm('Remove this node?')) return;
-            await fetch(`/api/v1/nodes/${nodeId}`, {method: 'DELETE'});
-            loadNodes();
+            if (!confirm('确定移除此节点?')) return;
+            try {
+                await fetch('/api/v1/nodes/' + encodeURIComponent(nodeId), {method: 'DELETE'});
+                loadNodes();
+            } catch (e) {
+                alert('移除失败: ' + e.message);
+            }
         }
 
-        socket.on('node_update', loadNodes);
+        // WebSocket 实时更新
+        socket.on('node_update', function() { loadNodes(); });
+
+        // 初始加载
         loadNodes();
+
+        // 定时自动刷新
         setInterval(loadNodes, 10000);
     </script>
 
     <style>
-        .page-header { margin-bottom: 2rem; }
-        .page-header h1 { margin-bottom: 0.5rem; }
-        .page-header p { color: var(--text-muted); }
-        .empty-state { text-align: center; padding: 3rem; }
-        .empty-state code { display: block; margin-top: 1rem; background: rgba(255,255,255,0.1); padding: 1rem; border-radius: 4px; }
-        .tag { background: var(--primary); padding: 0.2rem 0.5rem; border-radius: 3px; font-size: 0.8rem; margin-right: 0.3rem; }
-        .btn-sm { padding: 0.3rem 0.8rem; font-size: 0.85rem; }
+        .empty-state {
+            text-align: center;
+            padding: 3rem 2rem;
+        }
+
+        .node-card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 1.2rem;
+        }
+
+        .node-detail-card {
+            border-left: 4px solid var(--border);
+        }
+
+        .node-detail-card.online { border-left-color: var(--success); }
+        .node-detail-card.offline { border-left-color: var(--danger); }
+        .node-detail-card.busy { border-left-color: var(--warning); }
+
+        .node-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+
+        .node-card-name {
+            font-weight: 600;
+            font-size: 1.05rem;
+        }
+
+        .node-card-body {
+            margin-bottom: 1rem;
+        }
+
+        .node-info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.35rem 0;
+            font-size: 0.88rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .node-info-row:last-child {
+            border-bottom: none;
+        }
+
+        .node-info-label {
+            color: var(--text-muted);
+        }
+
+        .node-info-row code {
+            background: var(--bg-color);
+            padding: 0.1rem 0.4rem;
+            border-radius: 3px;
+            font-size: 0.82rem;
+            color: var(--primary);
+        }
+
+        .node-card-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+            margin-top: 0.6rem;
+        }
+
+        .tag-pill {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 10px;
+            font-size: 0.75rem;
+            background: var(--primary-light);
+            color: var(--primary);
+            font-weight: 500;
+        }
+
+        .node-card-footer {
+            display: flex;
+            justify-content: flex-end;
+            padding-top: 0.6rem;
+            border-top: 1px solid var(--border);
+        }
     </style>
 </body>
 </html>

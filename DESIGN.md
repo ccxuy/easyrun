@@ -1,6 +1,6 @@
 # EZ 设计规格
 
-EZ 是 go-task 的超集前端。go-task 是执行引擎，EZ 在其上提供参数管理、任务编排、工作区隔离、分布式执行等能力。
+EZ 是轻量任务编排平台。go-task 是底层执行引擎，EZ 在其上提供参数管理、任务编排、工作区隔离、可视化管理等能力。
 
 ## 设计原则
 
@@ -23,9 +23,11 @@ EZ 是 go-task 的超集前端。go-task 是执行引擎，EZ 在其上提供参
 | Task (任务) | 可执行的工作单元。go-task task 的超集，支持 `ez-*` 扩展字段 |
 | 行内任务 | 定义在根 `Taskfile.yml` 中的 task 条目 |
 | 目录任务 | `tasks/<name>/` 下自包含的任务目录，含 `Taskfile.yml` + `task.yml` 元数据 |
+| 工具任务 | `lib/tools/<name>.yml`，EZ 自身的内置工具（server、doctor、prune 等）|
 | Plan (计划) | 多 Task 的编排，定义执行顺序和依赖，编译为标准 go-task Taskfile |
 | Step (步骤) | Plan 内的单个环节 |
 | Workspace (工作区) | 项目根 `workspace/` 下的隔离执行目录，防止污染源码 |
+| Plugin (插件) | `plugins/` 或 `~/.ez/plugins/` 下的扩展，支持 hook 类型 |
 
 **任务生命周期**: `pending → running → success / failed`
 
@@ -36,6 +38,7 @@ project/
 ├── ez                        # 主入口（唯一可执行文件）
 ├── lib/
 │   ├── ez-core.sh            # 核心函数库
+│   ├── tools/                # 工具任务 (server, doctor, prune)
 │   └── completion/           # Tab 补全脚本
 ├── dep/                      # 依赖二进制 (go-task, yq)
 ├── Taskfile.yml              # 根 Taskfile（行内任务）
@@ -46,6 +49,9 @@ project/
 │       └── scripts/          # 辅助脚本
 ├── plans/                    # Plan 定义
 │   └── kernel-ci.yml
+├── plugins/                  # 项目级插件
+│   └── stats-reporter.yml    # 统计上报插件
+├── templates/                # 任务模板
 ├── workspace/                # 执行工作区（gitignore，项目根目录）
 │   ├── kernel-build/         #   任务默认工作区
 │   │   ├── src -> ../..      #   符号链接到项目根
@@ -59,8 +65,12 @@ project/
 │   │   └── state/            #     恢复状态
 │   └── logs/                 #   全局日志（非工作区运行）
 ├── test/selftest/            # 自测试套件
-├── server/                   # Server + Client（可选，分布式组件）
-│   └── client/               #   Client Agent
+├── server/                   # Web 管理平台（Flask + SocketIO）
+│   ├── main.py               #   Server 主程序
+│   ├── templates/            #   HTML 模板
+│   ├── static/               #   CSS/JS 静态资源
+│   ├── Dockerfile            #   Docker 构建
+│   └── docker-compose.yml    #   Docker 编排
 ├── DESIGN.md                 # 本文件
 ├── PLAN.md                   # 开发计划
 └── README.md                 # 基础用法
@@ -109,6 +119,40 @@ tasks:
 - `scripts/`、`config/` 等辅助文件
 
 目录任务在 `ez list` 中以 `[dir]` 标记显示。
+
+### 工具任务
+
+`lib/tools/<name>.yml` 下的 EZ 内置工具。与行内/目录任务不同，工具任务随 EZ 发布，用于 EZ 自身功能（启动 Server、环境检查、清理等）。
+
+工具任务特点：
+- 存放在 `lib/tools/`，随 EZ 分发
+- `ez list` 默认不显示，`ez list --tools` 或 `ez tools` 显示
+- `ez <tool-name>` 可直接执行（如 `ez server`、`ez doctor`）
+- 在任务列表中标记为 `[tool]`
+
+预置工具任务：
+
+| 工具 | 说明 |
+|------|------|
+| `server` | 启动 EZ Web 管理平台 |
+| `doctor` | 检查 EZ 运行环境（依赖、项目结构）|
+| `prune` | 清理过程文件（workspace、logs、state）|
+
+工具任务 YAML 格式：
+
+```yaml
+# lib/tools/server.yml
+name: server
+desc: "启动 EZ Server Web 管理平台"
+tool: true
+tasks:
+  default:
+    desc: "启动 Server"
+    cmd: "python3 -m server.main"
+  docker:
+    desc: "Docker 管理"
+    cmd: "docker compose -f server/docker-compose.yml up -d"
+```
 
 ### task.yml 元数据
 
@@ -359,8 +403,8 @@ steps:
 
 ```
 # 任务执行
-ez                            # 等价于 ez list
-ez <name>                     # 直接执行（行内或文件夹任务）
+ez                            # 项目概况摘要
+ez <name>                     # 直接执行（行内、目录或工具任务）
 ez <name> --dry-run           # 预览不执行
 
 # 任务管理
@@ -376,6 +420,9 @@ ez plan list / new / show / build / check
                               # 计划管理子命令
 
 # 工具
+ez tools                      # 列出工具任务
+ez doctor                     # 环境检查
+ez server                     # 启动 Web 管理平台
 ez browse                     # 交互式任务导航
 ez log list / show            # 执行日志
 ez completion bash|zsh        # Tab 补全脚本
@@ -503,3 +550,106 @@ POST   /api/v1/plans/:name/run     # 执行计划
 - [yq](https://github.com/mikefarah/yq) — YAML 处理器
 
 EZ 不生成 Go 代码，纯 Bash 实现。go-task 和 yq 作为二进制依赖安装到 `dep/` 目录。
+
+---
+
+## 插件系统
+
+### Hook 插件
+
+Hook 插件在任务执行的特定阶段自动触发。插件文件为 YAML 格式，存放在：
+
+- `plugins/` — 项目级插件
+- `~/.ez/plugins/hook/` — 用户级插件
+
+```yaml
+# plugins/stats-reporter.yml
+name: stats-reporter
+type: hook
+trigger: post_run    # pre_run | post_run | on_error
+script: |
+  #!/usr/bin/env bash
+  curl -sf -X POST "$EZ_SERVER_URL/api/v1/stats/report" \
+    -H "Content-Type: application/json" \
+    -d '{"task": "'$EZ_TASK_NAME'", "exit_code": '$EZ_TASK_EXIT_CODE'}' \
+    2>/dev/null || true
+```
+
+Hook 可用环境变量：`EZ_TASK_NAME`、`EZ_TASK_EXIT_CODE`、`EZ_TASK_OUTPUT`、`EZ_TASK_DURATION`、`EZ_WORKSPACE_NAME`。
+
+---
+
+## Web 管理平台
+
+### 架构
+
+EZ Server 是作业管理平台，核心理念：**一切执行都是 Plan，单任务是最简 Plan**。
+
+```
+┌─────────────────────────────────────┐
+│        EZ Server (Flask)            │
+│  ┌──────────┐ ┌──────────────────┐  │
+│  │  Web UI  │ │    REST API      │  │
+│  │  :8080   │ │    /api/v1/...   │  │
+│  └────┬─────┘ └───────┬──────────┘  │
+│       └───────┬───────┘             │
+│        SQLite + SocketIO            │
+└───────────────┬─────────────────────┘
+                │ HTTP/WebSocket
+   ┌────────────┼────────────┐
+   │            │            │
+┌──┴───┐   ┌───┴───┐   ┌───┴──┐
+│CLI上报│   │Client │   │Client│
+│Plugin │   │node-1 │   │node-2│
+└──────┘   └───────┘   └──────┘
+```
+
+### 页面结构
+
+| 页面 | 路由 | 功能 |
+|------|------|------|
+| 总览 | `/` | 状态摘要、最近执行、快速操作 |
+| 任务 | `/tasks` | 任务树浏览器（命名空间展开、参数表单）|
+| 计划 | `/plans` | Plan 管理 + DAG 执行视图 |
+| 执行记录 | `/jobs` | Server 作业 + CLI 上报记录 |
+| 节点 | `/nodes` | 节点管理 |
+| 统计 | `/charts` | 执行趋势、任务分布、耗时分析图表 |
+
+### API 体系
+
+```
+# 任务管理
+GET  /api/v1/tasks/tree          任务树（含命名空间分组）
+GET  /api/v1/tasks/<name>/params 任务参数定义
+
+# Plan 编排
+GET  /api/v1/plans               计划列表
+GET  /api/v1/plans/<name>        计划详情
+POST /api/v1/plans/<name>/run    执行计划
+POST /api/v1/plans/run-task      单任务执行
+GET  /api/v1/plans/runs          执行历史
+GET  /api/v1/plans/runs/<id>     执行状态
+
+# 统计上报
+POST /api/v1/stats/report        CLI 统计上报
+GET  /api/v1/stats/executions    CLI 执行历史
+
+# 模板
+GET  /api/v1/templates           模板列表
+
+# 节点 + 作业（原有）
+GET  /api/v1/nodes               节点列表
+POST /api/v1/tasks/run           提交作业
+GET  /api/v1/jobs                作业列表
+```
+
+### DAG 可视化
+
+Plan 执行视图将每个步骤显示为 DAG 节点，通过 `needs` 依赖关系绘制连线：
+
+- 灰色 = 待执行（pending）
+- 蓝色 = 运行中（running）
+- 绿色 = 成功（success）
+- 红色 = 失败（failed）
+
+节点可点击展开，查看任务描述、进度输出和完整日志。通过 WebSocket 实时推送状态更新。

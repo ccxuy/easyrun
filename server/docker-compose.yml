@@ -14,10 +14,12 @@ services:
     ports:
       - "${EZ_HTTP_PORT:-8080}:8080"
     volumes:
-      - ez-data:/data
+      - ./data:/data
       - ../Taskfile.yml:/app/Taskfile.yml:ro
       - ../tasks:/app/tasks:ro
       - ../plans:/app/plans:ro
+      - ../plugins:/app/plugins:ro
+      - ../templates:/app/templates:ro
     environment:
       - EZ_SERVER_TOKEN=${EZ_SERVER_TOKEN:-}
       - EZ_HTTP_PORT=8080
@@ -27,7 +29,3 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-
-volumes:
-  ez-data:
-    driver: local

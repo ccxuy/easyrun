@@ -22,17 +22,17 @@ tasks:
   help:
     desc: "测试 ez help"
     cmds:
-      - cmd: ./ez help | grep -q "go-task"
       - cmd: ./ez help | grep -q "orchestration"
       - cmd: ./ez help | grep -q "completion"
       - cmd: ./ez help | grep -q "Workspace"
+      - cmd: ./ez help | grep -q "Tools"
       - cmd: echo "✓ ez help OK"
 
   version:
     desc: "测试 ez version"
     cmds:
       - cmd: ./ez version | grep -q "ez version"
-      - cmd: ./ez version | grep -q "beta"
+      - cmd: ./ez version | grep -q "2.1.0"
       - cmd: echo "✓ ez version OK"
 
   list:
@@ -75,8 +75,8 @@ tasks:
       # ez <task> 等价于 ez run <task>
       - cmd: ./ez run clean | grep -q "Cleaning"
       - cmd: ./ez hello EZ_NAME=World --dry-run | grep -q "EZ_NAME=World"
-      # ez 无参数等价于 ez list
-      - cmd: ./ez | grep -q "Tasks"
+      # ez 无参数显示 summary
+      - cmd: ./ez | grep -q "Quick"
       # 未知命令报错
       - cmd: ./ez nonexistent-xyz 2>&1 | grep -q "未知命令或任务"
       - cmd: echo "✓ implicit run OK"

@@ -3,70 +3,91 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EZ Dashboard</title>
+    <title>EZ 管理平台</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <script src="/static/js/socket.io.min.js"></script>
 </head>
 <body>
     <nav class="navbar">
-        <div class="nav-brand">EZ Dashboard</div>
+        <div class="nav-brand">EZ 管理平台</div>
         <div class="nav-links">
-            <a href="/" class="active">Overview</a>
-            <a href="/nodes">Nodes</a>
-            <a href="/tasks">Tasks</a>
-            <a href="/jobs">Jobs</a>
-            <a href="/charts">Charts</a>
+            <a href="/" class="active">总览</a>
+            <a href="/tasks">任务</a>
+            <a href="/plans">计划</a>
+            <a href="/jobs">执行记录</a>
+            <a href="/nodes">节点</a>
+            <a href="/charts">统计</a>
         </div>
     </nav>
 
     <main class="container">
-        <div class="dashboard">
+        <!-- 统计卡片 -->
+        <div class="stat-grid">
+            <div class="stat-card primary">
+                <div class="stat-value" id="stat-total">-</div>
+                <div class="stat-label">总执行</div>
+            </div>
+            <div class="stat-card success">
+                <div class="stat-value" id="stat-success">-</div>
+                <div class="stat-label">成功</div>
+            </div>
+            <div class="stat-card danger">
+                <div class="stat-value" id="stat-failed">-</div>
+                <div class="stat-label">失败</div>
+            </div>
+            <div class="stat-card warning">
+                <div class="stat-value" id="stat-rate">-</div>
+                <div class="stat-label">成功率</div>
+            </div>
+        </div>
+
+        <div class="dashboard" style="margin-top:1.2rem;">
             <!-- 节点状态 -->
             <div class="card">
-                <h2>Nodes</h2>
-                <div id="node-list" class="node-grid">
-                    <div class="loading">Loading...</div>
+                <h2>节点状态</h2>
+                <div id="node-grid" class="node-grid">
+                    <div class="loading">加载中...</div>
                 </div>
             </div>
 
             <!-- 活跃任务 -->
             <div class="card">
-                <h2>Active Jobs</h2>
+                <h2>活跃任务</h2>
                 <div id="active-jobs" class="job-list">
-                    <div class="empty">No active jobs</div>
+                    <div class="empty">暂无活跃任务</div>
                 </div>
             </div>
 
             <!-- 快速执行 -->
             <div class="card">
-                <h2>Quick Run</h2>
+                <h2>快速执行</h2>
                 <form id="quick-run-form" class="quick-run">
                     <select id="task-select" required>
-                        <option value="">Select a task...</option>
+                        <option value="">选择任务...</option>
                     </select>
                     <select id="node-select">
-                        <option value="">Local (Server)</option>
+                        <option value="">本地执行</option>
                     </select>
-                    <button type="submit" class="btn btn-primary">Run</button>
+                    <button type="submit" class="btn btn-primary">执行</button>
                 </form>
             </div>
 
-            <!-- 最近任务 -->
+            <!-- 最近执行 -->
             <div class="card full-width">
-                <h2>Recent Jobs</h2>
+                <h2>最近执行</h2>
                 <table id="recent-jobs" class="table">
                     <thead>
                         <tr>
                             <th>ID</th>
-                            <th>Task</th>
-                            <th>Node</th>
-                            <th>Status</th>
-                            <th>Duration</th>
-                            <th>Actions</th>
+                            <th>任务</th>
+                            <th>节点</th>
+                            <th>状态</th>
+                            <th>耗时</th>
+                            <th>操作</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <tr><td colspan="6" class="empty">No jobs yet</td></tr>
+                        <tr><td colspan="6" class="empty">暂无执行记录</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -74,110 +95,165 @@
     </main>
 
     <script>
-        const socket = io();
+        var socket = io();
 
-        // 加载节点列表
+        var statusLabels = {
+            success: '成功', failed: '失败', error: '错误',
+            running: '运行中', pending: '等待中', cancelled: '已取消', timeout: '超时'
+        };
+
+        function formatDuration(started, finished) {
+            if (!started || !finished) return '-';
+            var ms = new Date(finished) - new Date(started);
+            var s = Math.round(ms / 1000);
+            if (s < 60) return s + '秒';
+            if (s < 3600) return Math.floor(s / 60) + '分' + (s % 60) + '秒';
+            return Math.floor(s / 3600) + '时' + Math.floor((s % 3600) / 60) + '分';
+        }
+
+        function escapeHtml(str) {
+            var div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        async function loadStats() {
+            try {
+                var res = await fetch('/api/v1/stats');
+                var data = await res.json();
+                var s = data.summary;
+                document.getElementById('stat-total').textContent = s.total_jobs;
+                document.getElementById('stat-success').textContent = s.success;
+                document.getElementById('stat-failed').textContent = s.failed;
+                document.getElementById('stat-rate').textContent = s.success_rate + '%';
+            } catch (e) {
+                console.error('加载统计失败:', e);
+            }
+        }
+
         async function loadNodes() {
-            const res = await fetch('/api/v1/nodes');
-            const data = await res.json();
-            const container = document.getElementById('node-list');
-            const nodeSelect = document.getElementById('node-select');
+            try {
+                var res = await fetch('/api/v1/nodes');
+                var data = await res.json();
+                var container = document.getElementById('node-grid');
+                var nodeSelect = document.getElementById('node-select');
 
-            if (data.nodes.length === 0) {
-                container.innerHTML = '<div class="empty">No nodes connected</div>';
-                return;
+                if (data.nodes.length === 0) {
+                    container.innerHTML = '<div class="empty">暂无节点</div>';
+                } else {
+                    container.innerHTML = data.nodes.map(function(node) {
+                        var tagsHtml = node.tags && node.tags.length
+                            ? '<div class="node-tags">' + node.tags.join(', ') + '</div>' : '';
+                        return '<div class="node-card ' + escapeHtml(node.status) + '">' +
+                            '<div class="node-name">' + escapeHtml(node.name) + '</div>' +
+                            '<div class="node-status">' + escapeHtml(node.status) + '</div>' +
+                            tagsHtml + '</div>';
+                    }).join('');
+                }
+
+                nodeSelect.innerHTML = '<option value="">本地执行</option>' +
+                    data.nodes.map(function(n) {
+                        return '<option value="' + escapeHtml(n.id) + '">' + escapeHtml(n.name) + '</option>';
+                    }).join('');
+            } catch (e) {
+                console.error('加载节点失败:', e);
             }
-
-            container.innerHTML = data.nodes.map(node => `
-                <div class="node-card ${node.status}">
-                    <div class="node-name">${node.name}</div>
-                    <div class="node-status">${node.status}</div>
-                    ${node.tags.length ? `<div class="node-tags">${node.tags.join(', ')}</div>` : ''}
-                </div>
-            `).join('');
-
-            // 更新下拉框
-            nodeSelect.innerHTML = '<option value="">Local (Server)</option>' +
-                data.nodes.map(n => `<option value="${n.id}">${n.name}</option>`).join('');
         }
 
-        // 加载任务列表
         async function loadTasks() {
-            const res = await fetch('/api/v1/tasks');
-            const data = await res.json();
-            const select = document.getElementById('task-select');
-
-            select.innerHTML = '<option value="">Select a task...</option>' +
-                data.tasks.map(t => `<option value="${t.name}">${t.name}</option>`).join('');
+            try {
+                var res = await fetch('/api/v1/tasks');
+                var data = await res.json();
+                var select = document.getElementById('task-select');
+                select.innerHTML = '<option value="">选择任务...</option>' +
+                    data.tasks.map(function(t) {
+                        return '<option value="' + escapeHtml(t.name) + '">' + escapeHtml(t.name) + '</option>';
+                    }).join('');
+            } catch (e) {
+                console.error('加载任务失败:', e);
+            }
         }
 
-        // 加载任务记录
         async function loadJobs() {
-            const res = await fetch('/api/v1/jobs');
-            const data = await res.json();
+            try {
+                var res = await fetch('/api/v1/jobs');
+                var data = await res.json();
 
-            // 活跃任务
-            const activeJobs = data.jobs.filter(j => ['pending', 'running'].includes(j.status));
-            const activeContainer = document.getElementById('active-jobs');
-            if (activeJobs.length === 0) {
-                activeContainer.innerHTML = '<div class="empty">No active jobs</div>';
-            } else {
-                activeContainer.innerHTML = activeJobs.map(job => `
-                    <div class="job-item ${job.status}">
-                        <div class="job-info">
-                            <span class="job-task">${job.task}</span>
-                            <span class="job-node">${job.node_id || 'local'}</span>
-                        </div>
-                        <div class="job-status">${job.status}</div>
-                    </div>
-                `).join('');
-            }
+                // 活跃任务
+                var activeJobs = data.jobs.filter(function(j) {
+                    return j.status === 'pending' || j.status === 'running';
+                });
+                var activeContainer = document.getElementById('active-jobs');
+                if (activeJobs.length === 0) {
+                    activeContainer.innerHTML = '<div class="empty">暂无活跃任务</div>';
+                } else {
+                    activeContainer.innerHTML = activeJobs.map(function(job) {
+                        return '<div class="job-item ' + escapeHtml(job.status) + '">' +
+                            '<div class="job-info">' +
+                            '<span class="job-task">' + escapeHtml(job.task) + '</span>' +
+                            '<span class="job-node">' + escapeHtml(job.node_id || '本地') + '</span>' +
+                            '</div>' +
+                            '<span class="status-badge ' + escapeHtml(job.status) + '">' +
+                            (statusLabels[job.status] || job.status) + '</span>' +
+                            '</div>';
+                    }).join('');
+                }
 
-            // 最近任务表格
-            const tbody = document.querySelector('#recent-jobs tbody');
-            if (data.jobs.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="6" class="empty">No jobs yet</td></tr>';
-            } else {
-                tbody.innerHTML = data.jobs.slice(0, 20).map(job => {
-                    const duration = job.finished_at && job.started_at ?
-                        Math.round((new Date(job.finished_at) - new Date(job.started_at)) / 1000) + 's' : '-';
-                    return `
-                        <tr class="${job.status}">
-                            <td><code>${job.id}</code></td>
-                            <td>${job.task}</td>
-                            <td>${job.node_id || 'local'}</td>
-                            <td><span class="status-badge ${job.status}">${job.status}</span></td>
-                            <td>${duration}</td>
-                            <td><a href="/jobs?id=${job.id}">View</a></td>
-                        </tr>
-                    `;
-                }).join('');
+                // 最近执行表格
+                var tbody = document.querySelector('#recent-jobs tbody');
+                if (data.jobs.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无执行记录</td></tr>';
+                } else {
+                    tbody.innerHTML = data.jobs.slice(0, 20).map(function(job) {
+                        var duration = formatDuration(job.started_at, job.finished_at);
+                        return '<tr>' +
+                            '<td><code>' + escapeHtml(job.id) + '</code></td>' +
+                            '<td>' + escapeHtml(job.task) + '</td>' +
+                            '<td>' + escapeHtml(job.node_id || '本地') + '</td>' +
+                            '<td><span class="status-badge ' + escapeHtml(job.status) + '">' +
+                            (statusLabels[job.status] || job.status) + '</span></td>' +
+                            '<td>' + duration + '</td>' +
+                            '<td><a href="/jobs?id=' + escapeHtml(job.id) + '">查看</a></td>' +
+                            '</tr>';
+                    }).join('');
+                }
+            } catch (e) {
+                console.error('加载任务失败:', e);
             }
         }
 
         // 快速执行
-        document.getElementById('quick-run-form').addEventListener('submit', async (e) => {
+        document.getElementById('quick-run-form').addEventListener('submit', async function(e) {
             e.preventDefault();
-            const task = document.getElementById('task-select').value;
-            const node = document.getElementById('node-select').value;
-
+            var task = document.getElementById('task-select').value;
+            var node = document.getElementById('node-select').value;
             if (!task) return;
 
-            const res = await fetch('/api/v1/tasks/run', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({task, node: node || null, vars: {}})
-            });
-            const data = await res.json();
-            alert(`Job submitted: ${data.job_id}`);
-            loadJobs();
+            try {
+                var res = await fetch('/api/v1/tasks/run', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({task: task, node: node || null, vars: {}})
+                });
+                var data = await res.json();
+                if (data.job_id) {
+                    alert('任务已提交: ' + data.job_id);
+                    loadJobs();
+                    loadStats();
+                } else {
+                    alert('提交失败: ' + (data.error || '未知错误'));
+                }
+            } catch (err) {
+                alert('请求失败: ' + err.message);
+            }
         });
 
-        // WebSocket 事件
-        socket.on('node_update', () => loadNodes());
-        socket.on('job_update', () => loadJobs());
+        // WebSocket 实时更新
+        socket.on('node_update', function() { loadNodes(); });
+        socket.on('job_update', function() { loadJobs(); loadStats(); });
 
         // 初始加载
+        loadStats();
         loadNodes();
         loadTasks();
         loadJobs();
@@ -185,6 +261,7 @@
         // 定时刷新
         setInterval(loadNodes, 10000);
         setInterval(loadJobs, 5000);
+        setInterval(loadStats, 15000);
     </script>
 </body>
 </html>

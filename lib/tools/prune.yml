@@ -1,0 +1,13 @@
+name: prune
+desc: "清理 EZ 过程文件"
+tool: true
+tasks:
+  default:
+    desc: "清理 workspace、日志和内部状态"
+    cmds:
+      - cmd: |
+          echo "Cleaning EZ runtime data..."
+          rm -rf "$EZ_ROOT/workspace" && echo "  ✓ workspace/ removed"
+          rm -rf "$EZ_ROOT/.ez" && echo "  ✓ .ez/ removed"
+          rm -rf "$EZ_ROOT/.ez-logs" && echo "  ✓ .ez-logs/ removed"
+          echo "Done."

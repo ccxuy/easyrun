@@ -65,5 +65,5 @@ tasks:
     cmds:
       - cmd: test -f ./server/templates/charts.html
       - cmd: grep -q "chart.min.js" ./server/templates/charts.html
-      - cmd: grep -q "formula-editor" ./server/templates/charts.html
+      - cmd: grep -q "renderCharts" ./server/templates/charts.html
       - cmd: echo "✓ chart files OK"

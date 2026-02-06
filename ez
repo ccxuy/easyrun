@@ -24,14 +24,15 @@ cmd_version() {
 # -----------------------------------------------------------------------------
 cmd_help() {
     cat << 'EOF'
-EZ - go-task task orchestration frontend
+EZ - Lightweight task orchestration platform
 
 Usage: ez [command] [options]
 
 Task execution:
-    ez                    List all tasks
+    ez                    Project summary (default)
     ez <name>             Execute task (= ez run <name>)
     ez <name> --dry-run   Preview command
+    ez list [filter]      List all tasks (-t to include tools)
 
 Task management:
     new <name>            Create task directory (tasks/<name>/)
@@ -53,6 +54,10 @@ Workspace:
     matrix <task> --vary  Multi-variant parallel execution
 
 Tools:
+    tools                 List tool tasks
+    doctor                Check EZ environment
+    server [start|docker|status]
+                          Server management
     browse                Interactive task browser
     log list / show       Execution logs
     completion bash|zsh   Tab completion
@@ -104,17 +109,175 @@ cmd_log() {
 }
 
 # -----------------------------------------------------------------------------
+# 命令: summary (默认显示)
+# -----------------------------------------------------------------------------
+cmd_summary() {
+    local taskfile
+    taskfile=$(find_taskfile ".") || true
+
+    # 统计
+    local inline_count=0 dir_count=0 tool_count=0 plan_count=0 ws_count=0
+    if [[ -n "$taskfile" ]]; then
+        inline_count=$("$YQ" eval '.tasks | keys | length' "$taskfile" 2>/dev/null || echo 0)
+    fi
+    [[ -d "$EZ_TASKS_DIR" ]] && dir_count=$(find "$EZ_TASKS_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+    [[ -d "$EZ_TOOLS_DIR" ]] && tool_count=$(find "$EZ_TOOLS_DIR" -name "*.yml" 2>/dev/null | wc -l)
+    [[ -d "$EZ_PLANS_DIR" ]] && plan_count=$(find "$EZ_PLANS_DIR" -name "*.yml" 2>/dev/null | wc -l)
+    [[ -d "$EZ_WORKSPACE_DIR" ]] && ws_count=$(find "$EZ_WORKSPACE_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+
+    local total_tasks=$((inline_count + dir_count))
+
+    echo -e "${BOLD}EZ${NC} v${EZ_VERSION}  ${DIM}($total_tasks tasks, $plan_count plans, $ws_count workspaces)${NC}"
+    echo ""
+
+    # 最近执行的工作区
+    if [[ -d "$EZ_WORKSPACE_DIR" ]]; then
+        local recent_found=0
+        while IFS= read -r ctx_file; do
+            [[ -z "$ctx_file" || ! -f "$ctx_file" ]] && continue
+            local ws_dir ws_name task_name plan_name exit_code
+            ws_dir=$(dirname "$ctx_file")
+            ws_name=$(basename "$ws_dir")
+            task_name=$("$YQ" eval '.task // ""' "$ctx_file" 2>/dev/null)
+            plan_name=$("$YQ" eval '.plan // ""' "$ctx_file" 2>/dev/null)
+            exit_code=$("$YQ" eval '.exit_code // ""' "$ctx_file" 2>/dev/null)
+
+            local label=""
+            [[ -n "$task_name" && "$task_name" != "null" ]] && label="task:$task_name"
+            [[ -n "$plan_name" && "$plan_name" != "null" ]] && label="plan:$plan_name"
+            [[ -z "$label" ]] && continue
+
+            local status_color="${GREEN}"
+            [[ "$exit_code" != "0" ]] && status_color="${RED}"
+
+            local age=""
+            if command -v stat &>/dev/null; then
+                local mtime now diff_s
+                mtime=$(stat -c %Y "$ctx_file" 2>/dev/null || echo 0)
+                now=$(date +%s)
+                diff_s=$((now - mtime))
+                if [[ $diff_s -lt 60 ]]; then
+                    age="${diff_s}s ago"
+                elif [[ $diff_s -lt 3600 ]]; then
+                    age="$((diff_s / 60))m ago"
+                elif [[ $diff_s -lt 86400 ]]; then
+                    age="$((diff_s / 3600))h ago"
+                else
+                    age="$((diff_s / 86400))d ago"
+                fi
+            fi
+
+            if [[ $recent_found -eq 0 ]]; then
+                echo -e "${BOLD}Recent:${NC}"
+            fi
+            printf "  ${GREEN}%-18s${NC} %-20s ${status_color}exit:%-3s${NC} ${DIM}%s${NC}\n" \
+                "$ws_name" "$label" "$exit_code" "$age"
+            recent_found=$((recent_found + 1))
+            [[ $recent_found -ge 5 ]] && break
+        done < <(find "$EZ_WORKSPACE_DIR" -name ".ez-run.yml" -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2-)
+
+        [[ $recent_found -gt 0 ]] && echo ""
+    fi
+
+    # 工具任务
+    if [[ -d "$EZ_TOOLS_DIR" ]] && [[ $tool_count -gt 0 ]]; then
+        echo -e "${BOLD}Tools:${NC}"
+        while IFS= read -r tname; do
+            [[ -z "$tname" ]] && continue
+            local tdesc
+            tdesc=$(get_tool_meta "$tname" "desc")
+            printf "  ${CYAN}%-18s${NC} %s\n" "$tname" "$tdesc"
+        done < <(get_tool_tasks)
+        echo ""
+    fi
+
+    # 快捷命令
+    echo -e "${BOLD}Quick:${NC}"
+    echo -e "  ez list            列出所有任务"
+    echo -e "  ez <task>          执行任务"
+    echo -e "  ez plan <name>     执行计划"
+    echo -e "  ez ws              工作区状态"
+    echo -e "  ez tools           工具任务"
+}
+
+# -----------------------------------------------------------------------------
+# 命令: tools (工具任务管理)
+# -----------------------------------------------------------------------------
+cmd_tools() {
+    local subcmd="${1:-}"
+
+    # 无参数: 列出工具任务
+    if [[ -z "$subcmd" ]]; then
+        if [[ ! -d "$EZ_TOOLS_DIR" ]]; then
+            echo "  (no tool tasks)"
+            return
+        fi
+
+        echo -e "${BOLD}Tool Tasks:${NC} (lib/tools/)"
+        echo ""
+        while IFS= read -r tname; do
+            [[ -z "$tname" ]] && continue
+            local tdesc
+            tdesc=$(get_tool_meta "$tname" "desc")
+            printf "  ${CYAN}%-18s${NC} %s\n" "$tname" "$tdesc"
+        done < <(get_tool_tasks)
+        return
+    fi
+
+    # 参数: 执行指定工具任务
+    local tool_name="$subcmd"
+    shift || true
+
+    if ! is_tool_task "$tool_name"; then
+        die "未知工具任务: $tool_name\n  可用: $(get_tool_tasks | tr '\n' ' ')"
+    fi
+
+    # 解析子任务 (default if not specified)
+    local subtask="default"
+    if [[ $# -gt 0 ]] && [[ "$1" != *=* ]] && [[ "$1" != --* ]]; then
+        subtask="$1"
+        shift
+    fi
+
+    # 收集 extra vars
+    local -a extra_vars=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            *=*) extra_vars+=("$1"); shift ;;
+            *) shift ;;
+        esac
+    done
+
+    # 获取命令并执行
+    local cmd_script
+    cmd_script=$(get_tool_task_cmd "$tool_name" "$subtask")
+    if [[ -z "$cmd_script" || "$cmd_script" == "null" ]]; then
+        die "工具任务 $tool_name 没有子任务: $subtask"
+    fi
+
+    # 导出 EZ_* 变量
+    export EZ_ROOT="$EZ_ROOT"
+    for v in "${extra_vars[@]}"; do
+        export "$v"
+    done
+
+    # 执行 (在子 shell 中关闭 errexit，工具脚本自行处理错误)
+    ( set +e; eval "$cmd_script" )
+}
+
+# -----------------------------------------------------------------------------
 # 命令: list
 # -----------------------------------------------------------------------------
 cmd_list() {
-    local taskfile filter="" show_all=false group_mode=true
+    local taskfile filter="" show_all=false group_mode=true show_tools=false
     taskfile=$(find_taskfile ".") || die "未找到 Taskfile"
 
     # 解析参数
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            -a|--all) show_all=true; shift ;;
+            -a|--all) show_all=true; show_tools=true; shift ;;
             -f|--flat) group_mode=false; shift ;;
+            -t|--tools) show_tools=true; shift ;;
             -g|--grep) filter="$2"; shift 2 ;;
             *) filter="$1"; shift ;;
         esac
@@ -187,6 +350,18 @@ cmd_list() {
 
             printf "  ${GREEN}%-25s${NC} %s%s\n" "$name" "$desc" "$flags"
         done
+
+        # 显示工具任务
+        if $show_tools && [[ -d "$EZ_TOOLS_DIR" ]]; then
+            echo ""
+            echo -e "${BOLD}Tools:${NC}"
+            while IFS= read -r tname; do
+                [[ -z "$tname" ]] && continue
+                local tdesc
+                tdesc=$(get_tool_meta "$tname" "desc")
+                printf "  ${CYAN}%-25s${NC} %s ${DIM}[tool]${NC}\n" "$tname" "$tdesc"
+            done < <(get_tool_tasks)
+        fi
         return
     fi
 
@@ -260,6 +435,18 @@ cmd_list() {
         fi
         echo ""
     done
+
+    # 显示工具任务
+    if $show_tools && [[ -d "$EZ_TOOLS_DIR" ]]; then
+        echo -e "${BOLD}Tools:${NC}"
+        while IFS= read -r tname; do
+            [[ -z "$tname" ]] && continue
+            local tdesc
+            tdesc=$(get_tool_meta "$tname" "desc")
+            printf "  ${CYAN}%-25s${NC} %s ${DIM}[tool]${NC}\n" "$tname" "$tdesc"
+        done < <(get_tool_tasks)
+        echo ""
+    fi
 }
 
 # -----------------------------------------------------------------------------
@@ -859,19 +1046,19 @@ cmd_run() {
     fi
 
     # pre_run 钩子
-    run_hooks "$taskfile" "$task" "pre_run" 0 ""
+    run_hooks "$taskfile" "$task" "pre_run" 0 "" 0 ""
 
     echo -e "${BOLD}Running:${NC} ${cmd[*]}"
     echo ""
 
     # 执行任务并捕获输出和退出码
     local task_output exit_code=0
+    local start_time=$(date +%s)
     if $enable_log; then
         local log_file
         log_file=$(get_task_log_path "$taskfile" "$task" "$(date +%s)")
         write_log_header "$log_file" "$task" "" ""
         echo -e "  ${DIM}Log: $log_file${NC}"
-        local start_time=$(date +%s)
         task_output=$("${cmd[@]}" 2>&1) || exit_code=$?
         echo "$task_output"
         echo "$task_output" >> "$log_file"
@@ -881,12 +1068,14 @@ cmd_run() {
         task_output=$("${cmd[@]}" 2>&1) || exit_code=$?
         echo "$task_output"
     fi
+    local end_time=${end_time:-$(date +%s)}
+    local duration=$((end_time - start_time))
 
     # post_run 或 on_error 钩子
     if [[ $exit_code -eq 0 ]]; then
-        run_hooks "$taskfile" "$task" "post_run" "$exit_code" "$task_output"
+        run_hooks "$taskfile" "$task" "post_run" "$exit_code" "$task_output" "$duration" ""
     else
-        run_hooks "$taskfile" "$task" "on_error" "$exit_code" "$task_output"
+        run_hooks "$taskfile" "$task" "on_error" "$exit_code" "$task_output" "$duration" ""
         return $exit_code
     fi
 }
@@ -3231,11 +3420,13 @@ cmd_clean() {
 main() {
     ensure_deps
 
-    local cmd="${1:-list}"  # 无参数默认 list
+    local cmd="${1:-summary}"  # 无参数默认 summary
     shift || true
 
     case "$cmd" in
+        summary)      cmd_summary "$@" ;;
         list|ls)      cmd_list "$@" ;;
+        tools)        cmd_tools "$@" ;;
         browse)       cmd_browse "$@" ;;
         show|describe) cmd_show "$@" ;;
         run|exec)     cmd_run "$@" ;;
@@ -3257,7 +3448,13 @@ main() {
         version|-v|--version)   cmd_version ;;
         help|-h|--help)         cmd_help ;;
         *)
-            # 尝试作为 task 名直接执行 (implicit run)
+            # 1. 尝试作为工具任务执行
+            if is_tool_task "$cmd"; then
+                cmd_tools "$cmd" "$@"
+                return
+            fi
+
+            # 2. 尝试作为 task 名直接执行 (implicit run)
             local taskfile
             if taskfile=$(find_taskfile ".") && task_exists "$taskfile" "$cmd"; then
                 cmd_run "$cmd" "$@"

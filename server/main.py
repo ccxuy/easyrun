@@ -79,6 +79,31 @@ def init_db():
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS executions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task TEXT NOT NULL,
+                exit_code INTEGER,
+                duration REAL,
+                host TEXT,
+                workspace TEXT,
+                params TEXT,
+                timestamp TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS plan_runs (
+                id TEXT PRIMARY KEY,
+                plan_name TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                steps_json TEXT,
+                params TEXT,
+                started_at TIMESTAMP,
+                finished_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         conn.commit()
 
 
@@ -119,6 +144,12 @@ def nodes_page():
 def tasks_page():
     """任务列表页面"""
     return render_template('tasks.html')
+
+
+@app.route('/plans')
+def plans_page():
+    """计划管理页面"""
+    return render_template('plans.html')
 
 
 @app.route('/jobs')
@@ -534,6 +565,289 @@ def api_stats():
         'duration': duration_stats,
         'raw_jobs': raw,
     })
+
+
+@app.route('/api/v1/stats/report', methods=['POST'])
+def api_stats_report():
+    """接收 CLI 上报的执行统计"""
+    data = request.json or {}
+    task = data.get('task', '')
+    if not task:
+        return jsonify({'error': 'task required'}), 400
+
+    with db_lock:
+        with get_db() as conn:
+            conn.execute(
+                '''INSERT INTO executions (task, exit_code, duration, host, workspace, params, timestamp)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (task, data.get('exit_code', 0), data.get('duration', 0),
+                 data.get('host', ''), data.get('workspace', ''),
+                 data.get('params', ''), data.get('timestamp', datetime.now().isoformat()))
+            )
+            conn.commit()
+
+    return jsonify({'status': 'ok'})
+
+
+@app.route('/api/v1/stats/executions', methods=['GET'])
+def api_executions():
+    """获取 CLI 上报的执行历史"""
+    limit = request.args.get('limit', 50, type=int)
+    with db_lock:
+        with get_db() as conn:
+            rows = conn.execute(
+                'SELECT * FROM executions ORDER BY created_at DESC LIMIT ?', (limit,)
+            ).fetchall()
+    return jsonify({'executions': [dict(r) for r in rows]})
+
+
+# =============================================================================
+# API Routes - Task Tree
+# =============================================================================
+
+@app.route('/api/v1/tasks/tree', methods=['GET'])
+def api_task_tree():
+    """返回树形任务结构"""
+    try:
+        result = subprocess.run(
+            [os.path.join(EZ_ROOT, 'ez'), 'list', '--all', '--flat'],
+            capture_output=True, text=True, timeout=10
+        )
+        # 解析平面列表
+        tasks_flat = []
+        for line in result.stdout.split('\n'):
+            line = line.strip()
+            if not line or line.startswith('Tasks:'):
+                continue
+            parts = line.split(maxsplit=1)
+            if parts:
+                name = parts[0]
+                rest = parts[1] if len(parts) > 1 else ''
+                desc = rest.split('[')[0].strip() if '[' in rest else rest.strip()
+                task_type = 'dir' if '[dir]' in rest else 'inline'
+                if '[tool]' in rest:
+                    task_type = 'tool'
+                tasks_flat.append({'name': name, 'desc': desc, 'type': task_type})
+
+        # 按命名空间分组 (用 : 分隔)
+        tree = []
+        groups = {}
+        for t in tasks_flat:
+            if ':' in t['name']:
+                ns = t['name'].split(':')[0]
+                if ns not in groups:
+                    groups[ns] = {'name': ns, 'type': 'namespace', 'desc': '', 'children': []}
+                groups[ns]['children'].append(t)
+            else:
+                tree.append(t)
+
+        # 插入 namespace groups
+        for ns, group in sorted(groups.items()):
+            group['desc'] = f'{len(group["children"])} 个子任务'
+            tree.append(group)
+
+        # 扫描 tasks/ 目录获取参数信息
+        tasks_dir = os.path.join(EZ_ROOT, 'tasks')
+        if os.path.isdir(tasks_dir):
+            for entry in os.listdir(tasks_dir):
+                entry_path = os.path.join(tasks_dir, entry)
+                if os.path.isdir(entry_path) and os.path.isfile(os.path.join(entry_path, 'Taskfile.yml')):
+                    # 检查是否已在列表中
+                    found = False
+                    for t in tree:
+                        if t.get('name') == entry:
+                            t['path'] = f'tasks/{entry}/'
+                            found = True
+                            break
+                    if not found:
+                        tree.append({'name': entry, 'type': 'dir', 'desc': '', 'path': f'tasks/{entry}/'})
+
+        return jsonify({'tree': tree})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v1/tasks/<task_name>/params', methods=['GET'])
+def api_task_params(task_name):
+    """获取任务参数定义"""
+    try:
+        result = subprocess.run(
+            [os.path.join(EZ_ROOT, 'ez'), 'show', task_name],
+            capture_output=True, text=True, timeout=10
+        )
+        return jsonify({'name': task_name, 'details': result.stdout, 'exit_code': result.returncode})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# =============================================================================
+# API Routes - Plans
+# =============================================================================
+
+@app.route('/api/v1/plans', methods=['GET'])
+def api_list_plans():
+    """列出所有计划"""
+    plans = []
+    plans_dir = os.path.join(EZ_ROOT, 'plans')
+    if os.path.isdir(plans_dir):
+        for f in os.listdir(plans_dir):
+            if f.endswith('.yml') or f.endswith('.yaml'):
+                name = os.path.splitext(f)[0]
+                # 读取 plan 概要
+                try:
+                    result = subprocess.run(
+                        [os.path.join(EZ_ROOT, 'dep', 'yq'), 'eval', '.name // .desc // ""',
+                         os.path.join(plans_dir, f)],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    desc = result.stdout.strip()
+                except Exception:
+                    desc = ''
+                plans.append({'name': name, 'file': f, 'desc': desc})
+
+    return jsonify({'plans': plans})
+
+
+@app.route('/api/v1/plans/<plan_name>', methods=['GET'])
+def api_get_plan(plan_name):
+    """获取计划详情"""
+    try:
+        result = subprocess.run(
+            [os.path.join(EZ_ROOT, 'ez'), 'plan', 'show', plan_name],
+            capture_output=True, text=True, timeout=10
+        )
+        return jsonify({'name': plan_name, 'details': result.stdout, 'exit_code': result.returncode})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v1/plans/<plan_name>/run', methods=['POST'])
+def api_run_plan(plan_name):
+    """执行计划"""
+    data = request.json or {}
+    task_vars = data.get('vars', {})
+
+    run_id = str(uuid.uuid4())[:8]
+
+    # 记录到数据库
+    with db_lock:
+        with get_db() as conn:
+            conn.execute(
+                '''INSERT INTO plan_runs (id, plan_name, status, params, started_at)
+                   VALUES (?, ?, 'running', ?, ?)''',
+                (run_id, plan_name, json.dumps(task_vars), datetime.now().isoformat())
+            )
+            conn.commit()
+
+    # 在后台线程执行
+    import threading
+    def _run():
+        cmd = [os.path.join(EZ_ROOT, 'ez'), 'plan', 'run', plan_name]
+        for k, v in task_vars.items():
+            cmd.append(f'{k}={v}')
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+            status = 'success' if result.returncode == 0 else 'failed'
+            with db_lock:
+                with get_db() as conn:
+                    conn.execute(
+                        '''UPDATE plan_runs SET status=?, finished_at=?, steps_json=?
+                           WHERE id=?''',
+                        (status, datetime.now().isoformat(),
+                         json.dumps({'stdout': result.stdout[-2000:], 'stderr': result.stderr[-2000:]}),
+                         run_id)
+                    )
+                    conn.commit()
+            socketio.emit('plan_update', {'run_id': run_id, 'status': status})
+        except Exception as e:
+            with db_lock:
+                with get_db() as conn:
+                    conn.execute(
+                        'UPDATE plan_runs SET status=?, finished_at=? WHERE id=?',
+                        ('error', datetime.now().isoformat(), run_id)
+                    )
+                    conn.commit()
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({'run_id': run_id, 'status': 'running'})
+
+
+@app.route('/api/v1/plans/run-task', methods=['POST'])
+def api_run_single_task():
+    """单任务执行 (包装为最简 Plan)"""
+    data = request.json or {}
+    task = data.get('task')
+    if not task:
+        return jsonify({'error': 'task required'}), 400
+
+    task_vars = data.get('vars', {})
+    node_id = data.get('node')
+
+    # 如果指定了节点，使用原来的分布式执行
+    if node_id:
+        if node_id not in nodes:
+            return jsonify({'error': f'Node {node_id} not found'}), 404
+        job_id = str(uuid.uuid4())[:8]
+        job = {
+            'id': job_id, 'task': task, 'node_id': node_id,
+            'vars': task_vars, 'status': 'pending', 'logs': '',
+            'created_at': datetime.now().isoformat()
+        }
+        jobs[job_id] = job
+        socketio.emit('job_assigned', job, room=node_id)
+        return jsonify({'job_id': job_id, 'status': 'pending'})
+
+    # 本地执行
+    job_id = str(uuid.uuid4())[:8]
+    job = {
+        'id': job_id, 'task': task, 'node_id': None,
+        'vars': task_vars, 'status': 'running', 'logs': '',
+        'created_at': datetime.now().isoformat()
+    }
+    jobs[job_id] = job
+    _execute_job_local(job_id)
+    return jsonify({'job_id': job_id, 'status': job['status']})
+
+
+@app.route('/api/v1/plans/runs', methods=['GET'])
+def api_list_plan_runs():
+    """获取计划执行历史"""
+    limit = request.args.get('limit', 20, type=int)
+    with db_lock:
+        with get_db() as conn:
+            rows = conn.execute(
+                'SELECT * FROM plan_runs ORDER BY created_at DESC LIMIT ?', (limit,)
+            ).fetchall()
+    return jsonify({'runs': [dict(r) for r in rows]})
+
+
+@app.route('/api/v1/plans/runs/<run_id>', methods=['GET'])
+def api_get_plan_run(run_id):
+    """获取单次计划执行状态"""
+    with db_lock:
+        with get_db() as conn:
+            row = conn.execute('SELECT * FROM plan_runs WHERE id = ?', (run_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(dict(row))
+
+
+# =============================================================================
+# API Routes - Templates
+# =============================================================================
+
+@app.route('/api/v1/templates', methods=['GET'])
+def api_list_templates():
+    """列出可用模板"""
+    templates = []
+    tpl_dir = os.path.join(EZ_ROOT, 'templates')
+    if os.path.isdir(tpl_dir):
+        for f in os.listdir(tpl_dir):
+            if f.endswith('.yml') or f.endswith('.yaml') or f.endswith('.ytt.yml'):
+                name = f.replace('.ytt.yml', '').replace('.yml', '').replace('.yaml', '')
+                templates.append({'name': name, 'file': f})
+    return jsonify({'templates': templates})
 
 
 @app.route('/api/v1/charts', methods=['GET'])

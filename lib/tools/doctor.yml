@@ -1,0 +1,30 @@
+name: doctor
+desc: "检查 EZ 运行环境"
+tool: true
+tasks:
+  default:
+    desc: "EZ 环境诊断"
+    cmds:
+      - cmd: |
+          echo "== EZ $("$EZ_ROOT/ez" version 2>/dev/null | head -1) =="
+          echo ""
+          echo "Dependencies:"
+          test -x "$EZ_ROOT/dep/task" && echo "  ✓ task: $("$EZ_ROOT/dep/task" --version 2>/dev/null | head -1)" || echo "  ✗ task: MISSING"
+          test -x "$EZ_ROOT/dep/yq" && echo "  ✓ yq: $("$EZ_ROOT/dep/yq" --version 2>/dev/null | head -1)" || echo "  ✗ yq: MISSING"
+          test -x "$EZ_ROOT/dep/ytt" && echo "  ✓ ytt: available" || echo "  ○ ytt: not installed (optional)"
+          echo ""
+          echo "Project:"
+          inline=$("$EZ_ROOT/dep/yq" eval '.tasks | keys | length' "$EZ_ROOT/Taskfile.yml" 2>/dev/null || echo 0)
+          dir_count=$(ls -d "$EZ_ROOT/tasks"/*/ 2>/dev/null | wc -l)
+          plan_count=$(ls "$EZ_ROOT/plans"/*.yml 2>/dev/null | wc -l)
+          ws_count=$(ls -d "$EZ_ROOT/workspace"/*/ 2>/dev/null | wc -l)
+          echo "  Tasks:      $inline inline + $dir_count dir"
+          echo "  Plans:      $plan_count"
+          echo "  Workspaces: $ws_count"
+          echo ""
+          echo "Directories:"
+          test -d "$EZ_ROOT/tasks" && echo "  ✓ tasks/" || echo "  ○ tasks/ (not created)"
+          test -d "$EZ_ROOT/plans" && echo "  ✓ plans/" || echo "  ○ plans/ (not created)"
+          test -d "$EZ_ROOT/workspace" && echo "  ✓ workspace/" || echo "  ○ workspace/ (not created)"
+          test -d "$EZ_ROOT/plugins" && echo "  ✓ plugins/" || echo "  ○ plugins/ (not created)"
+          test -d "$EZ_ROOT/server" && echo "  ✓ server/" || echo "  ○ server/ (not found)"

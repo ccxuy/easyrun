@@ -6,7 +6,7 @@
 
 # 获取 EZ 根目录
 EZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EZ_VERSION="2.0.0-beta"
+EZ_VERSION="2.1.0"
 
 # 本地二进制路径
 YQ="$EZ_ROOT/dep/yq"
@@ -19,6 +19,7 @@ YTT="$EZ_ROOT/dep/ytt"
 # Task      EZ core unit, superset of go-task task
 #   - inline task: defined in root Taskfile.yml
 #   - dir task: tasks/<name>/ self-contained directory with Taskfile.yml + task.yml
+#   - tool task: lib/tools/<name>.yml EZ built-in utility (server, doctor, prune)
 # Plan      Multi-task orchestration, compiles to Taskfile
 # Step      Single step within a Plan
 # Artifact  Task output file, can be referenced by downstream tasks
@@ -42,6 +43,12 @@ EZ_TASKS_DIR="$EZ_ROOT/tasks"
 
 # plans/ 计划目录
 EZ_PLANS_DIR="$EZ_ROOT/plans"
+
+# lib/tools/ EZ internal tool tasks
+EZ_TOOLS_DIR="$EZ_ROOT/lib/tools"
+
+# plugins/ project-level plugins
+EZ_PLUGINS_DIR="$EZ_ROOT/plugins"
 
 # -----------------------------------------------------------------------------
 # 颜色定义
@@ -320,6 +327,54 @@ get_dir_tasks() {
             fi
         done
     fi
+}
+
+# -----------------------------------------------------------------------------
+# Tool tasks (lib/tools/)
+# -----------------------------------------------------------------------------
+
+# 获取工具任务列表
+get_tool_tasks() {
+    if [[ -d "$EZ_TOOLS_DIR" ]]; then
+        for f in "$EZ_TOOLS_DIR"/*.yml; do
+            [[ ! -f "$f" ]] && continue
+            local name
+            name=$("$YQ" eval '.name // ""' "$f" 2>/dev/null)
+            [[ -n "$name" && "$name" != "null" ]] && echo "$name"
+        done
+    fi
+}
+
+# 检查是否是工具任务
+is_tool_task() {
+    local name="$1"
+    [[ -f "$EZ_TOOLS_DIR/$name.yml" ]]
+}
+
+# 获取工具任务元数据
+# 参数: $1=name, $2=field (desc, tool, etc.)
+get_tool_meta() {
+    local name="$1" field="$2"
+    local f="$EZ_TOOLS_DIR/$name.yml"
+    [[ -f "$f" ]] || return 1
+    "$YQ" eval ".$field // \"\"" "$f" 2>/dev/null
+}
+
+# 获取工具任务的子任务列表
+get_tool_subtasks() {
+    local name="$1"
+    local f="$EZ_TOOLS_DIR/$name.yml"
+    [[ -f "$f" ]] || return 1
+    "$YQ" eval '.tasks | keys | .[]' "$f" 2>/dev/null
+}
+
+# 获取工具任务命令脚本
+# 参数: $1=tool name, $2=subtask (default: "default")
+get_tool_task_cmd() {
+    local name="$1" subtask="${2:-default}"
+    local f="$EZ_TOOLS_DIR/$name.yml"
+    [[ -f "$f" ]] || return 1
+    "$YQ" eval ".tasks.$subtask.cmds[0].cmd // .tasks.$subtask.cmds[0] // \"\"" "$f" 2>/dev/null
 }
 
 # -----------------------------------------------------------------------------
@@ -603,30 +658,67 @@ run_hooks() {
     local hook_type="$3"
     local exit_code="${4:-0}"
     local task_output="${5:-}"
+    local duration="${6:-0}"
+    local ws_name="${7:-}"
 
-    if ! has_ez_hook "$taskfile" "$task" "$hook_type"; then
-        return 0
+    # 导出上下文供钩子和插件使用
+    export EZ_TASK_NAME="$task"
+    export EZ_TASK_EXIT_CODE="$exit_code"
+    export EZ_TASK_OUTPUT="$task_output"
+    export EZ_TASK_DURATION="$duration"
+    export EZ_WORKSPACE_NAME="$ws_name"
+
+    # 1. 执行 Taskfile 中定义的 hooks
+    if has_ez_hook "$taskfile" "$task" "$hook_type"; then
+        local hooks_json
+        hooks_json=$(get_ez_hooks_json "$taskfile" "$task" "$hook_type")
+        local count
+        count=$(echo "$hooks_json" | "$YQ" eval 'length' -)
+
+        echo -e "${BOLD}[ez-hooks:$hook_type]${NC}"
+        for ((i=0; i<count; i++)); do
+            local hook_name hook_script
+            hook_name=$(echo "$hooks_json" | "$YQ" eval ".[$i].name // \"hook-$i\"" -)
+            hook_script=$(echo "$hooks_json" | "$YQ" eval ".[$i].script // \"\"" -)
+
+            if [[ -n "$hook_script" && "$hook_script" != "null" ]]; then
+                echo -e "  ${CYAN}→ $hook_name${NC}"
+                eval "$hook_script" || true
+            fi
+        done
     fi
 
-    local hooks_json
-    hooks_json=$(get_ez_hooks_json "$taskfile" "$task" "$hook_type")
-    local count
-    count=$(echo "$hooks_json" | "$YQ" eval 'length' -)
+    # 2. 执行项目级插件 (plugins/*.yml with type: hook)
+    _run_plugin_hooks "$hook_type"
+}
 
-    echo -e "${BOLD}[ez-hooks:$hook_type]${NC}"
-    for ((i=0; i<count; i++)); do
-        local hook_name hook_script
-        hook_name=$(echo "$hooks_json" | "$YQ" eval ".[$i].name // \"hook-$i\"" -)
-        hook_script=$(echo "$hooks_json" | "$YQ" eval ".[$i].script // \"\"" -)
+# 执行项目级和全局插件中匹配 hook_type 的钩子
+_run_plugin_hooks() {
+    local hook_type="$1"
 
-        if [[ -n "$hook_script" && "$hook_script" != "null" ]]; then
-            echo -e "  ${CYAN}→ $hook_name${NC}"
-            # 导出上下文供钩子使用
-            export EZ_TASK_NAME="$task"
-            export EZ_TASK_EXIT_CODE="$exit_code"
-            export EZ_TASK_OUTPUT="$task_output"
-            eval "$hook_script"
-        fi
+    # 映射 hook_type: post_run → post_run, on_error → on_error
+    local trigger_match="$hook_type"
+
+    local plugin_dirs=("$EZ_PLUGINS_DIR" "$HOME/.ez/plugins/hook")
+    for pdir in "${plugin_dirs[@]}"; do
+        [[ ! -d "$pdir" ]] && continue
+        for pfile in "$pdir"/*.yml; do
+            [[ ! -f "$pfile" ]] && continue
+            local ptype ptrigger pscript penabled
+            ptype=$("$YQ" eval '.type // ""' "$pfile" 2>/dev/null)
+            [[ "$ptype" != "hook" ]] && continue
+
+            ptrigger=$("$YQ" eval '.trigger // "post_run"' "$pfile" 2>/dev/null)
+            [[ "$ptrigger" != "$trigger_match" ]] && continue
+
+            penabled=$("$YQ" eval '.config.enabled // true' "$pfile" 2>/dev/null)
+            [[ "$penabled" == "false" ]] && continue
+
+            pscript=$("$YQ" eval '.script // ""' "$pfile" 2>/dev/null)
+            if [[ -n "$pscript" && "$pscript" != "null" ]]; then
+                eval "$pscript" || true
+            fi
+        done
     done
 }
 

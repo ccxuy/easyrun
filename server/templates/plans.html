@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>计划 - EZ 管理平台</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="/static/js/socket.io.min.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">EZ 管理平台</div>
+        <div class="nav-links">
+            <a href="/">总览</a>
+            <a href="/tasks">任务</a>
+            <a href="/plans" class="active">计划</a>
+            <a href="/jobs">执行记录</a>
+            <a href="/nodes">节点</a>
+            <a href="/charts">统计</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="page-header">
+            <h1>计划编排</h1>
+            <p>DAG 依赖计划管理与可视化执行</p>
+        </div>
+
+        <div class="dag-container">
+            <!-- 左侧边栏 -->
+            <div class="dag-sidebar">
+                <div class="card" style="margin-bottom:1rem;">
+                    <h2>计划列表</h2>
+                    <div id="plan-list" class="plan-list">
+                        <div class="loading">加载中...</div>
+                    </div>
+                </div>
+                <div class="card">
+                    <h2>最近执行</h2>
+                    <div id="plan-runs" class="run-history">
+                        <div class="empty">暂无执行记录</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 右侧主区域 -->
+            <div class="dag-main">
+                <div class="card">
+                    <div id="dag-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                        <h2 id="dag-title" style="margin-bottom:0;">选择一个计划</h2>
+                        <button id="btn-run-plan" class="btn btn-primary" style="display:none;" onclick="runPlan()">执行计划</button>
+                    </div>
+
+                    <!-- DAG 可视化画布 -->
+                    <div id="dag-canvas" class="dag-canvas">
+                        <div class="empty">从左侧选择一个计划查看 DAG 流程图</div>
+                    </div>
+
+                    <!-- 节点详情面板 -->
+                    <div id="dag-detail" class="dag-detail" style="display:none;">
+                        <h3 id="detail-title">步骤详情</h3>
+                        <div id="detail-body"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        var socket = io();
+        var currentPlan = null;
+        var planSteps = [];
+
+        var statusIcons = {
+            pending: '\u23F3',
+            running: '\u25B6\uFE0F',
+            success: '\u2705',
+            failed: '\u274C',
+            error: '\u26A0\uFE0F',
+            skipped: '\u23ED\uFE0F'
+        };
+
+        var statusLabels = {
+            pending: '等待中', running: '运行中', success: '成功',
+            failed: '失败', error: '错误', skipped: '已跳过'
+        };
+
+        function escapeHtml(str) {
+            var div = document.createElement('div');
+            div.textContent = str || '';
+            return div.innerHTML;
+        }
+
+        async function loadPlans() {
+            try {
+                var res = await fetch('/api/v1/plans');
+                var data = await res.json();
+                var container = document.getElementById('plan-list');
+
+                if (!data.plans || data.plans.length === 0) {
+                    container.innerHTML = '<div class="empty">暂无计划</div>';
+                    return;
+                }
+
+                container.innerHTML = data.plans.map(function(plan) {
+                    var activeClass = (currentPlan && currentPlan === plan.name) ? ' active' : '';
+                    return '<div class="plan-item' + activeClass + '" onclick="selectPlan(\'' + escapeHtml(plan.name) + '\')">' +
+                        '<div>' +
+                        '<div class="plan-name">' + escapeHtml(plan.name) + '</div>' +
+                        '<div class="plan-meta">' + escapeHtml(plan.desc || plan.file) + '</div>' +
+                        '</div>' +
+                        '</div>';
+                }).join('');
+            } catch (e) {
+                document.getElementById('plan-list').innerHTML =
+                    '<div class="empty">加载失败</div>';
+            }
+        }
+
+        async function loadPlanRuns() {
+            try {
+                var res = await fetch('/api/v1/plans/runs');
+                var data = await res.json();
+                var container = document.getElementById('plan-runs');
+
+                if (!data.runs || data.runs.length === 0) {
+                    container.innerHTML = '<div class="empty">暂无执行记录</div>';
+                    return;
+                }
+
+                container.innerHTML = data.runs.slice(0, 15).map(function(run) {
+                    var statusClass = run.status || 'pending';
+                    var timeStr = run.created_at ? new Date(run.created_at).toLocaleString('zh-CN') : '-';
+                    return '<div class="run-item ' + escapeHtml(statusClass) + '" ' +
+                        'onclick="showRunDetail(\'' + escapeHtml(run.id) + '\')" style="cursor:pointer;">' +
+                        '<div>' +
+                        '<strong>' + escapeHtml(run.plan_name) + '</strong>' +
+                        '<div style="font-size:0.75rem;color:var(--text-muted);">' + timeStr + '</div>' +
+                        '</div>' +
+                        '<span class="status-badge ' + escapeHtml(statusClass) + '">' +
+                        (statusLabels[statusClass] || statusClass) + '</span>' +
+                        '</div>';
+                }).join('');
+            } catch (e) {
+                document.getElementById('plan-runs').innerHTML =
+                    '<div class="empty">加载失败</div>';
+            }
+        }
+
+        async function selectPlan(planName) {
+            currentPlan = planName;
+            document.getElementById('dag-title').textContent = planName;
+            document.getElementById('btn-run-plan').style.display = 'inline-block';
+            document.getElementById('dag-detail').style.display = 'none';
+
+            // 更新列表高亮
+            document.querySelectorAll('.plan-item').forEach(function(el) {
+                el.classList.remove('active');
+            });
+            document.querySelectorAll('.plan-item').forEach(function(el) {
+                if (el.querySelector('.plan-name').textContent === planName) {
+                    el.classList.add('active');
+                }
+            });
+
+            // 加载计划详情
+            var canvas = document.getElementById('dag-canvas');
+            canvas.innerHTML = '<div class="loading">加载中...</div>';
+
+            try {
+                var res = await fetch('/api/v1/plans/' + encodeURIComponent(planName));
+                var data = await res.json();
+                parseAndRenderDAG(data.details || '');
+            } catch (e) {
+                canvas.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        function parseAndRenderDAG(detailsText) {
+            // 从 plan show 输出解析步骤
+            var steps = [];
+            var lines = detailsText.split('\n');
+            var currentStep = null;
+
+            lines.forEach(function(line) {
+                line = line.trim();
+                // 匹配步骤行: "step_name: task_name" 或类似格式
+                if (line && !line.startsWith('#') && !line.startsWith('Plan:') && !line.startsWith('---')) {
+                    var match = line.match(/^(\w[\w-]*)\s*[:]\s*(.+)/);
+                    if (match) {
+                        steps.push({
+                            name: match[1],
+                            task: match[2].trim(),
+                            status: 'pending',
+                            depends: []
+                        });
+                    } else if (line.match(/^\d+\.\s+/)) {
+                        // 数字列表格式
+                        var stepMatch = line.match(/^\d+\.\s+(\S+)/);
+                        if (stepMatch) {
+                            steps.push({
+                                name: stepMatch[1],
+                                task: stepMatch[1],
+                                status: 'pending',
+                                depends: []
+                            });
+                        }
+                    } else if (line.match(/^[-*]\s+/)) {
+                        var bulletMatch = line.match(/^[-*]\s+(\S+)/);
+                        if (bulletMatch) {
+                            steps.push({
+                                name: bulletMatch[1],
+                                task: bulletMatch[1],
+                                status: 'pending',
+                                depends: []
+                            });
+                        }
+                    }
+                }
+            });
+
+            // 如果解析不到步骤, 退回到直接显示文本
+            if (steps.length === 0 && detailsText.trim()) {
+                steps = detailsText.trim().split('\n')
+                    .filter(function(l) { return l.trim() && !l.trim().startsWith('#'); })
+                    .slice(0, 20)
+                    .map(function(l, i) {
+                        return { name: 'step-' + (i + 1), task: l.trim(), status: 'pending', depends: [] };
+                    });
+            }
+
+            planSteps = steps;
+            renderDAGNodes(steps);
+        }
+
+        function renderDAGNodes(steps) {
+            var canvas = document.getElementById('dag-canvas');
+            if (steps.length === 0) {
+                canvas.innerHTML = '<div class="empty">无法解析计划步骤</div>';
+                return;
+            }
+
+            // 流式布局: 将步骤排列为多行
+            var cols = Math.min(steps.length, 4);
+            var html = '<div class="dag-flow" style="display:grid; grid-template-columns:repeat(' +
+                cols + ', 1fr); gap:1rem; justify-items:center;">';
+
+            steps.forEach(function(step, i) {
+                var icon = statusIcons[step.status] || statusIcons.pending;
+                html += '<div class="dag-node ' + escapeHtml(step.status) + '" onclick="showStepDetail(' + i + ')">' +
+                    '<div class="node-icon">' + icon + '</div>' +
+                    '<div class="node-name">' + escapeHtml(step.name) + '</div>' +
+                    '<div class="node-status">' + (statusLabels[step.status] || step.status) + '</div>' +
+                    '</div>';
+
+                // 连接箭头 (仅在非最后一个且非行末时)
+                if (i < steps.length - 1 && (i + 1) % cols !== 0) {
+                    // 箭头在 CSS grid 中自然排列
+                }
+            });
+
+            html += '</div>';
+            canvas.innerHTML = html;
+        }
+
+        function showStepDetail(index) {
+            var step = planSteps[index];
+            if (!step) return;
+
+            var detail = document.getElementById('dag-detail');
+            detail.style.display = 'block';
+            document.getElementById('detail-title').textContent = step.name;
+
+            var html = '<div class="detail-row">' +
+                '<span class="detail-label">任务</span>' +
+                '<span>' + escapeHtml(step.task) + '</span>' +
+                '</div>' +
+                '<div class="detail-row">' +
+                '<span class="detail-label">状态</span>' +
+                '<span class="status-badge ' + escapeHtml(step.status) + '">' +
+                (statusLabels[step.status] || step.status) + '</span>' +
+                '</div>';
+
+            if (step.duration) {
+                html += '<div class="detail-row">' +
+                    '<span class="detail-label">耗时</span>' +
+                    '<span>' + step.duration + '</span>' +
+                    '</div>';
+            }
+
+            if (step.depends && step.depends.length > 0) {
+                html += '<div class="detail-row">' +
+                    '<span class="detail-label">依赖</span>' +
+                    '<span>' + step.depends.join(', ') + '</span>' +
+                    '</div>';
+            }
+
+            if (step.log) {
+                html += '<div class="log-preview">' + escapeHtml(step.log) + '</div>';
+            }
+
+            document.getElementById('detail-body').innerHTML = html;
+        }
+
+        async function showRunDetail(runId) {
+            try {
+                var res = await fetch('/api/v1/plans/runs/' + encodeURIComponent(runId));
+                var run = await res.json();
+
+                var detail = document.getElementById('dag-detail');
+                detail.style.display = 'block';
+                document.getElementById('detail-title').textContent = '执行记录: ' + run.plan_name;
+
+                var html = '<div class="detail-row">' +
+                    '<span class="detail-label">运行 ID</span>' +
+                    '<span><code>' + escapeHtml(run.id) + '</code></span>' +
+                    '</div>' +
+                    '<div class="detail-row">' +
+                    '<span class="detail-label">状态</span>' +
+                    '<span class="status-badge ' + escapeHtml(run.status) + '">' +
+                    (statusLabels[run.status] || run.status) + '</span>' +
+                    '</div>' +
+                    '<div class="detail-row">' +
+                    '<span class="detail-label">开始时间</span>' +
+                    '<span>' + (run.started_at ? new Date(run.started_at).toLocaleString('zh-CN') : '-') + '</span>' +
+                    '</div>' +
+                    '<div class="detail-row">' +
+                    '<span class="detail-label">结束时间</span>' +
+                    '<span>' + (run.finished_at ? new Date(run.finished_at).toLocaleString('zh-CN') : '-') + '</span>' +
+                    '</div>';
+
+                // 日志预览
+                if (run.steps_json) {
+                    try {
+                        var stepsData = JSON.parse(run.steps_json);
+                        if (stepsData.stdout || stepsData.stderr) {
+                            html += '<div class="log-preview">' +
+                                escapeHtml((stepsData.stdout || '') + '\n' + (stepsData.stderr || '')) +
+                                '</div>';
+                        }
+                    } catch (e) {
+                        // ignore
+                    }
+                }
+
+                document.getElementById('detail-body').innerHTML = html;
+            } catch (e) {
+                console.error('加载执行记录失败:', e);
+            }
+        }
+
+        async function runPlan() {
+            if (!currentPlan) return;
+            if (!confirm('确定执行计划: ' + currentPlan + '?')) return;
+
+            try {
+                var res = await fetch('/api/v1/plans/' + encodeURIComponent(currentPlan) + '/run', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({vars: {}})
+                });
+                var data = await res.json();
+                if (data.run_id) {
+                    alert('计划已提交: ' + data.run_id);
+                    loadPlanRuns();
+
+                    // 更新 DAG 节点状态为 running
+                    planSteps.forEach(function(step) { step.status = 'running'; });
+                    renderDAGNodes(planSteps);
+                } else {
+                    alert('提交失败: ' + (data.error || '未知错误'));
+                }
+            } catch (e) {
+                alert('请求失败: ' + e.message);
+            }
+        }
+
+        // WebSocket 实时更新
+        socket.on('plan_update', function(data) {
+            loadPlanRuns();
+            // 更新 DAG 节点状态
+            if (data && data.status) {
+                planSteps.forEach(function(step) {
+                    step.status = data.status;
+                });
+                renderDAGNodes(planSteps);
+            }
+        });
+
+        // 初始加载
+        loadPlans();
+        loadPlanRuns();
+    </script>
+</body>
+</html>

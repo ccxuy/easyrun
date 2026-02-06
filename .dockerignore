@@ -1,0 +1,9 @@
+workspace/
+.ez/
+.ez-logs/
+.git/
+dep/
+*.md
+*.swp
+*~
+.DS_Store
