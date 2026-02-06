@@ -3,22 +3,27 @@ version: '3.8'
 services:
   ez-server:
     build:
-      context: .
-      dockerfile: Dockerfile.server
+      context: ..
+      dockerfile: server/Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NO_PROXY: ${NO_PROXY:-}
     image: ez-server:latest
     container_name: ez-server
     ports:
-      - "8080:8080"
+      - "${EZ_HTTP_PORT:-8080}:8080"
     volumes:
       - ez-data:/data
-      - ./Taskfile.yml:/app/Taskfile.yml:ro
-      - ./.ez-plan.yml:/app/.ez-plan.yml:ro
+      - ../Taskfile.yml:/app/Taskfile.yml:ro
+      - ../tasks:/app/tasks:ro
+      - ../plans:/app/plans:ro
     environment:
       - EZ_SERVER_TOKEN=${EZ_SERVER_TOKEN:-}
       - EZ_HTTP_PORT=8080
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/nodes"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/api/v1/nodes"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -7,6 +7,9 @@ tasks:
     cmds:
       - task: server-files
       - task: help-commands
+      - task: server-help
+      - task: docker-proxy
+      - task: certs-dir
       - cmd: echo "✓ 14-server 全部通过"
 
   server-files:
@@ -31,3 +34,27 @@ tasks:
       - cmd: ./ez help | grep -q "client help"
       - cmd: ./ez help | grep -q "分布式"
       - cmd: echo "✓ help commands OK"
+
+  server-help:
+    desc: "检查 server/client help 子命令"
+    cmds:
+      - cmd: ./ez server help | grep -q "代理"
+      - cmd: ./ez server help | grep -q "证书"
+      - cmd: ./ez client help | grep -q "Client"
+      - cmd: ./ez client help | grep -q "EZ_SERVER_URL"
+      - cmd: echo "✓ server/client help OK"
+
+  docker-proxy:
+    desc: "Dockerfile 支持代理构建参数"
+    cmds:
+      - cmd: grep -q "ARG HTTP_PROXY" ./server/Dockerfile
+      - cmd: grep -q "ARG HTTPS_PROXY" ./server/Dockerfile
+      - cmd: grep -q "ubuntu" ./server/Dockerfile
+      - cmd: grep -q "ca-certificates" ./server/Dockerfile
+      - cmd: echo "✓ docker proxy OK"
+
+  certs-dir:
+    desc: "检查证书目录"
+    cmds:
+      - cmd: test -d ./server/certs
+      - cmd: echo "✓ certs dir OK"

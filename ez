@@ -2625,8 +2625,41 @@ cmd_server() {
         start)    cmd_server_start "$@" ;;
         docker)   cmd_server_docker "$@" ;;
         status)   cmd_server_status "$@" ;;
-        *)        die "未知 server 子命令: $subcmd，可用: start, docker, status" ;;
+        help)     cmd_server_help ;;
+        *)        die "未知 server 子命令: $subcmd，可用: start, docker, status, help" ;;
     esac
+}
+
+cmd_server_help() {
+    cat << 'EOF'
+EZ Server - 分布式任务执行服务器
+
+用法: ez server <命令>
+
+命令:
+    start               启动 Server (默认 :8080)
+    docker [up|down|logs|build]
+                        Docker 容器管理
+    status              检查运行环境
+    help                本帮助
+
+Docker 构建 (支持代理):
+    docker build -f server/Dockerfile -t ez-server \
+      --build-arg HTTP_PROXY=http://proxy:8080 \
+      --build-arg HTTPS_PROXY=http://proxy:8080 .
+
+自定义 CA 证书:
+    将 .crt 文件放入 server/certs/ 目录后构建
+
+环境变量:
+    EZ_HTTP_PORT        HTTP 端口 (默认: 8080)
+    EZ_SERVER_TOKEN     API 认证令牌
+    EZ_DB_PATH          数据库路径
+
+Web Dashboard:
+    http://localhost:8080           Overview
+    http://localhost:8080/charts    数据可视化
+EOF
 }
 
 # client start - 启动客户端代理
@@ -2656,8 +2689,28 @@ cmd_client() {
 
     case "$subcmd" in
         start)    cmd_client_start "$@" ;;
-        *)        die "未知 client 子命令: $subcmd，可用: start" ;;
+        help)     cmd_client_help ;;
+        *)        die "未知 client 子命令: $subcmd，可用: start, help" ;;
     esac
+}
+
+cmd_client_help() {
+    cat << 'EOF'
+EZ Client - 分布式任务执行客户端
+
+用法: ez client <命令>
+
+命令:
+    start [server_url] [node_name]
+                        启动 Client Agent
+    help                本帮助
+
+环境变量:
+    EZ_SERVER_URL       Server 地址 (默认: http://localhost:8080)
+    EZ_NODE_NAME        节点名称
+    EZ_CLIENT_TOKEN     认证令牌
+    EZ_NODE_TAGS        自定义标签 (逗号分隔)
+EOF
 }
 
 # -----------------------------------------------------------------------------

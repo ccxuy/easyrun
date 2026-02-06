@@ -12,3 +12,7 @@ dep/ytt
 
 # 导出产物
 *.tar.gz
+
+# Server: 自定义证书和 JS 库 (构建时下载)
+server/certs/*.crt
+server/certs/*.pem
