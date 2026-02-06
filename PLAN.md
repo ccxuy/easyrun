@@ -19,13 +19,13 @@ easyrun/
 │   ├── task              # go-task 二进制
 │   ├── yq                # yq 二进制
 │   └── install-deps.sh   # 依赖安装脚本
-├── skills/               # Skill 目录（自包含技能，v1.4）
+├── tasks/                # 文件夹任务（EZ 自动发现）
 ├── plans/                # Plan 定义
-├── Taskfile.yml          # 根 Taskfile（简单任务）
+├── Taskfile.yml          # 根 Taskfile（行内任务）
 ├── .ez/                  # 运行时数据（按粒度组织，gitignore）
-│   ├── skills/<name>/    # 按 Skill 粒度（workspace/logs/artifacts）
+│   ├── tasks/<name>/     # 按任务粒度（workspace/logs/artifacts）
 │   └── plans/<name>/     # 按 Plan 粒度（build/logs/state）
-├── task/selftest/        # 自测试套件
+├── test/selftest/        # 自测试套件
 ├── DESIGN.md             # 设计规格
 └── PLAN.md               # 本文件
 ```
@@ -354,10 +354,10 @@ Running: ./dep/task -t Taskfile.yml build EZ_ARCH=aarch64
 | v0.8.x | 日志系统、ytt 模板支持 | ✅ |
 | v0.9.x | 任务继承、组合、自定义日志路径 | ✅ |
 | v1.0.x | Web Server/Client 分布式架构 | ✅ |
-| v1.1.0 | 命令重塑 + Skill-as-Folder + Tab 补全 | ✅ |
+| v1.1.0 | 命令重塑 + Task-as-Folder + Tab 补全 | ✅ |
 | v1.2.0 | Plan 编译系统 | ✅ |
 | v1.3.0 | Workspace 隔离 + .ez/ 统一目录 | ✅ |
-| v1.4.0-beta | Skill 体系 + .ez/ 按粒度重组 | ✅ |
+| v1.4.0-beta | 文件夹任务体系 + .ez/ 按粒度重组 | ✅ |
 
 ---
 
@@ -419,8 +419,8 @@ Running: ./dep/task -t Taskfile.yml build EZ_ARCH=aarch64
 | 版本 | 功能 | 说明 | 测试 |
 |------|------|------|------|
 | v1.1.0 | implicit run | `ez <task>` 直接执行, `ez` = `ez list` | ✅ |
-| 1.1.1 | Skill-as-Folder | `skills/` 目录自动发现, [skill] 标记 | ✅ |
-| 1.1.2 | ez new | 创建 `skills/<name>/Taskfile.yml + skill.yml` | ✅ |
+| 1.1.1 | Task-as-Folder | `tasks/` 目录自动发现, [folder] 标记 | ✅ |
+| 1.1.2 | ez new | 创建 `tasks/<name>/Taskfile.yml + task.yml` | ✅ |
 | 1.1.3 | ez check | 验证 Taskfile 语法和依赖 | ✅ |
 | 1.1.4 | Tab 补全 | `ez completion bash/zsh` 输出补全脚本 | ✅ |
 
@@ -449,16 +449,16 @@ Running: ./dep/task -t Taskfile.yml build EZ_ARCH=aarch64
 
 ---
 
-### v1.4 - Skill 体系 + .ez/ 按粒度重组
+### v1.4 - 文件夹任务体系 + .ez/ 按粒度重组
 
 | 版本 | 功能 | 说明 | 测试 |
 |------|------|------|------|
-| 1.4.0 | tasks/ → skills/ | Skill 术语体系，skills/ 目录 | ✅ |
-| 1.4.1 | skill.yml | AI-readable 元数据，skill 创建自动生成 | ✅ |
-| 1.4.2 | .ez/ 按粒度 | .ez/skills/<name>/ + .ez/plans/<name>/ | ✅ |
-| 1.4.3 | 默认 workspace | Skill 执行默认在 .ez/skills/<name>/workspace/ | ✅ |
+| 1.4.0 | tasks/ 文件夹任务 | 文件夹任务体系，tasks/ 目录 | ✅ |
+| 1.4.1 | task.yml | AI-readable 元数据，任务创建自动生成 | ✅ |
+| 1.4.2 | .ez/ 按粒度 | .ez/tasks/<name>/ + .ez/plans/<name>/ | ✅ |
+| 1.4.3 | 默认 workspace | 文件夹任务默认在 .ez/tasks/<name>/workspace/ 执行 | ✅ |
 | 1.4.4 | --no-workspace | 在源码目录直接执行（opt-out） | ✅ |
-| 1.4.5 | ez skill | export/import 子命令 | ✅ |
+| 1.4.5 | ez export/import | 导出/导入文件夹任务 | ✅ |
 | 1.4.6 | ez clean | 按粒度清理运行时数据 | ✅ |
 
 ---
@@ -507,7 +507,7 @@ Running: ./dep/task -t Taskfile.yml build EZ_ARCH=aarch64
 |----------|--------|------|
 | 01-deps.yml | yq, task 二进制 | ✅ |
 | 02-core.yml | 核心函数库 | ✅ |
-| 03-commands.yml | list, show, run, skill, clean | ✅ |
+| 03-commands.yml | list, show, run, export/import, clean | ✅ |
 | 04-nesting.yml | 任务嵌套和依赖 | ✅ |
 | 05-vars.yml | 变量传递 | ✅ |
 | 06-query.yml | 动态选项查询 | ✅ |
@@ -520,7 +520,7 @@ Running: ./dep/task -t Taskfile.yml build EZ_ARCH=aarch64
 | 13-inheritance.yml | 任务继承和组合 | ✅ |
 | 14-server.yml | Server/Client 分布式 | ✅ |
 | 16-plan-compile.yml | Plan 编译系统 | ✅ |
-| 17-workspace.yml | Workspace + Skill 默认 workspace | ✅ |
+| 17-workspace.yml | Workspace + 文件夹任务默认 workspace | ✅ |
 
 **总测试数: 59+ | 通过率: 100%**
 
@@ -545,12 +545,12 @@ Running: ./dep/task -t Taskfile.yml build EZ_ARCH=aarch64
 - ✅ **Web Server** (REST API, WebSocket, Dashboard)
 - ✅ **Client Agent** (节点注册, 任务执行, 日志上报)
 - ✅ **Docker 部署** (Dockerfile, docker-compose)
-- ✅ **命令重塑** (implicit run, Skill-as-Folder, Tab 补全)
+- ✅ **命令重塑** (implicit run, Task-as-Folder, Tab 补全)
 - ✅ **Plan 编译** (plan new/add/build/check, 拓扑排序, 依赖验证)
 - ✅ **Workspace 隔离** (.ez/ 统一目录, --workspace 隔离执行)
-- ✅ **Skill 体系** (skills/ 目录, skill.yml 元数据, 默认 workspace)
-- ✅ **按粒度 .ez/** (.ez/skills/<name>/, .ez/plans/<name>/)
-- ✅ **Skill 管理** (ez skill export/import, ez clean)
+- ✅ **文件夹任务** (tasks/ 目录, task.yml 元数据, 默认 workspace)
+- ✅ **按粒度 .ez/** (.ez/tasks/<name>/, .ez/plans/<name>/)
+- ✅ **任务管理** (ez export/import, ez clean)
 
 待实现:
 - v1.5: Server 资产管理 + 自动部署

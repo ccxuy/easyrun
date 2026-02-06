@@ -1,6 +1,6 @@
 # 日志系统
 
-任务执行日志自动记录到 `.ez/skills/<name>/logs/` 或 `.ez/plans/<name>/logs/`。
+任务执行日志自动记录到 `.ez/tasks/<name>/logs/` 或 `.ez/plans/<name>/logs/`。
 
 ## 启用日志
 

@@ -94,15 +94,15 @@ ez-params:
     help: "选择版本号"
 ```
 
-## Skill 中的参数
+## 文件夹任务中的参数
 
-Skill 支持两种参数定义方式:
+文件夹任务支持两种参数定义方式:
 
-1. **skill.yml params** — 优先级最高
+1. **task.yml params** — 优先级最高
 2. **Taskfile ez-params** — 回退方案
 
 ```yaml
-# skills/deploy/skill.yml
+# tasks/deploy/task.yml
 params:
   - name: env
     type: select

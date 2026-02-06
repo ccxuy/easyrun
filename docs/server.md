@@ -85,4 +85,4 @@ docker-compose up -d
 ./ez server status
 ```
 
-参见项目根目录的 `docker-compose.yml` 和 `Dockerfile.server`。
+参见 `server/docker-compose.yml` 和 `server/Dockerfile`。

@@ -1,6 +1,6 @@
 # Plan 计划编排
 
-Plan 是多 Skill 的编排单元，定义执行顺序、依赖和产物传递。Plan 编译为标准 go-task Taskfile 后由 go-task 引擎执行。
+Plan 是多 Task 的编排单元，定义执行顺序、依赖和产物传递。Plan 编译为标准 go-task Taskfile 后由 go-task 引擎执行。
 
 ## Plan 文件格式
 
@@ -70,7 +70,7 @@ ez plan kernel-ci
 ## 依赖验证
 
 `ez plan check <name>` 验证:
-- 所有 `step.task` 在 Taskfile 或 skills/ 中存在
+- 所有 `step.task` 在 Taskfile 或 tasks/ 中存在
 - `needs` 引用的 step 存在且无循环依赖
 - `inputs` 引用的 artifact 在上游 step 有定义
 - DAG 拓扑排序可行

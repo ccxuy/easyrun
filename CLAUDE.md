@@ -50,7 +50,7 @@ easyrun/
 ### 提交规范
 - **小功能点即提交**，不积攒大量变更
 - 提交信息格式: `<scope>: <简述>`
-  - 功能: `v1.4-beta: Skill 体系 + .ez/ 按粒度重组`
+  - 功能: `v1.4-beta: 文件夹任务体系 + .ez/ 按粒度重组`
   - 文档: `docs: v1.4 设计规格 + README 精简`
   - 修复: `fix: plan build 输出路径`
   - 测试: `test: 添加 workspace 隔离测试`
