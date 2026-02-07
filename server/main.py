@@ -10,13 +10,13 @@ import time
 import uuid
 import sqlite3
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 
 import yaml
 
-from flask import Flask, render_template, jsonify, request, Response
+from flask import Flask, render_template, jsonify, request, Response, redirect
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 
@@ -187,11 +187,46 @@ def init_db():
                 status TEXT DEFAULT 'pending',
                 steps_json TEXT,
                 params TEXT,
+                trigger_type TEXT DEFAULT 'manual',
+                duration REAL,
+                total_steps INTEGER DEFAULT 0,
+                completed_steps INTEGER DEFAULT 0,
                 started_at TIMESTAMP,
                 finished_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS plan_run_steps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                step_name TEXT NOT NULL,
+                task_name TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                exit_code INTEGER,
+                logs TEXT,
+                started_at TIMESTAMP,
+                finished_at TIMESTAMP,
+                duration REAL
+            )
+        ''')
+        # Migrate: add columns if missing
+        try:
+            conn.execute('SELECT trigger_type FROM plan_runs LIMIT 1')
+        except sqlite3.OperationalError:
+            conn.execute('ALTER TABLE plan_runs ADD COLUMN trigger_type TEXT DEFAULT "manual"')
+        try:
+            conn.execute('SELECT duration FROM plan_runs LIMIT 1')
+        except sqlite3.OperationalError:
+            conn.execute('ALTER TABLE plan_runs ADD COLUMN duration REAL')
+        try:
+            conn.execute('SELECT total_steps FROM plan_runs LIMIT 1')
+        except sqlite3.OperationalError:
+            conn.execute('ALTER TABLE plan_runs ADD COLUMN total_steps INTEGER DEFAULT 0')
+        try:
+            conn.execute('SELECT completed_steps FROM plan_runs LIMIT 1')
+        except sqlite3.OperationalError:
+            conn.execute('ALTER TABLE plan_runs ADD COLUMN completed_steps INTEGER DEFAULT 0')
         conn.commit()
 
 
@@ -210,6 +245,15 @@ def verify_token():
     if auth.startswith('Bearer '):
         return auth[7:] == SERVER_TOKEN
     return False
+
+
+def _get_task_bin():
+    """获取 task 二进制路径"""
+    task_bin = os.path.join(EZ_ROOT, 'dep', 'task')
+    if not os.path.isfile(task_bin):
+        import shutil
+        task_bin = shutil.which('task') or 'task'
+    return task_bin
 
 
 # =============================================================================
@@ -234,22 +278,57 @@ def tasks_page():
     return render_template('tasks.html')
 
 
+@app.route('/tasks/<task_name>')
+def task_detail_page(task_name):
+    """任务详情页面"""
+    return render_template('task_detail.html', task_name=task_name)
+
+
+@app.route('/tasks/new')
+def task_new_page():
+    """新建任务页面"""
+    return render_template('task_new.html')
+
+
 @app.route('/plans')
 def plans_page():
     """计划管理页面"""
     return render_template('plans.html')
 
 
-@app.route('/jobs')
-def jobs_page():
+@app.route('/plans/<plan_name>')
+def plan_detail_page(plan_name):
+    """计划详情页面"""
+    return render_template('plan_detail.html', plan_name=plan_name)
+
+
+@app.route('/executions')
+def executions_page():
     """执行记录页面"""
-    return render_template('jobs.html')
+    return render_template('executions.html')
+
+
+@app.route('/executions/<exec_id>')
+def execution_detail_page(exec_id):
+    """执行详情页面"""
+    return render_template('execution_detail.html', exec_id=exec_id)
+
+
+@app.route('/settings')
+def settings_page():
+    """设置页面"""
+    return render_template('settings.html')
+
+
+# Redirects for old URLs
+@app.route('/jobs')
+def jobs_redirect():
+    return redirect('/executions', code=301)
 
 
 @app.route('/charts')
-def charts_page():
-    """数据可视化页面"""
-    return render_template('charts.html')
+def charts_redirect():
+    return redirect('/settings', code=301)
 
 
 # =============================================================================
@@ -341,9 +420,12 @@ def api_remove_node(node_id):
 # API Routes - Tasks
 # =============================================================================
 
-@app.route('/api/v1/tasks', methods=['GET'])
-def api_list_tasks():
-    """列出可用任务 (复用 task tree 逻辑)"""
+@app.route('/api/v1/tasks', methods=['GET', 'POST'])
+def api_tasks():
+    """GET: 列出可用任务; POST: 创建任务"""
+    if request.method == 'POST':
+        return _api_create_task()
+
     try:
         tree_resp = api_task_tree()
         data = tree_resp.get_json()
@@ -360,9 +442,66 @@ def api_list_tasks():
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/v1/tasks/<task_name>', methods=['GET'])
-def api_get_task(task_name):
-    """获取任务详情"""
+def _api_create_task():
+    """创建任务"""
+    data = request.json or {}
+    name = data.get('name', '').strip()
+    task_type = data.get('type', 'dir')
+    desc = data.get('desc', '')
+
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    if not re.match(r'^[a-zA-Z0-9_-]+$', name):
+        return jsonify({'error': 'name 只允许字母、数字、下划线和连字符'}), 400
+
+    if task_type == 'dir':
+        task_dir = os.path.join(EZ_ROOT, 'tasks', name)
+        if os.path.isdir(task_dir):
+            return jsonify({'error': f'目录任务 "{name}" 已存在'}), 409
+        os.makedirs(task_dir, exist_ok=True)
+        # 创建 task.yml
+        meta = {'desc': desc, 'params': []}
+        with open(os.path.join(task_dir, 'task.yml'), 'w', encoding='utf-8') as f:
+            yaml.dump(meta, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        # 创建 Taskfile.yml 脚手架
+        taskfile = {
+            'version': '3',
+            'tasks': {
+                'default': {
+                    'desc': desc,
+                    'cmds': ['echo "Hello from ' + name + '"']
+                }
+            }
+        }
+        with open(os.path.join(task_dir, 'Taskfile.yml'), 'w', encoding='utf-8') as f:
+            yaml.dump(taskfile, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    else:
+        # inline: 追加到 Taskfile.yml
+        taskfile_path = os.path.join(EZ_ROOT, 'Taskfile.yml')
+        if not os.path.isfile(taskfile_path):
+            return jsonify({'error': 'Taskfile.yml not found'}), 404
+        tf_data = _load_yaml_file(taskfile_path)
+        if 'tasks' not in tf_data:
+            tf_data['tasks'] = {}
+        if name in tf_data['tasks']:
+            return jsonify({'error': f'行内任务 "{name}" 已存在'}), 409
+        tf_data['tasks'][name] = {
+            'desc': desc,
+            'cmds': ['echo "Hello from ' + name + '"']
+        }
+        with open(taskfile_path, 'w', encoding='utf-8') as f:
+            yaml.dump(tf_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    _invalidate_cache()
+    return jsonify({'ok': True, 'name': name, 'type': task_type})
+
+
+@app.route('/api/v1/tasks/<task_name>', methods=['GET', 'DELETE'])
+def api_get_or_delete_task(task_name):
+    """GET: 获取任务详情; DELETE: 删除任务"""
+    if request.method == 'DELETE':
+        return _api_delete_task(task_name)
+
     try:
         result = subprocess.run(
             [os.path.join(EZ_ROOT, 'ez'), 'show', task_name],
@@ -371,6 +510,68 @@ def api_get_task(task_name):
         return jsonify({'name': task_name, 'details': strip_ansi(result.stdout)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+def _api_delete_task(task_name):
+    """删除任务"""
+    import shutil
+    # 目录任务
+    task_dir = os.path.join(EZ_ROOT, 'tasks', task_name)
+    if os.path.isdir(task_dir):
+        shutil.rmtree(task_dir)
+        _invalidate_cache()
+        return jsonify({'ok': True, 'deleted': task_name})
+
+    # 行内任务
+    taskfile_path = os.path.join(EZ_ROOT, 'Taskfile.yml')
+    if os.path.isfile(taskfile_path):
+        tf_data = _load_yaml_file(taskfile_path)
+        tasks_map = tf_data.get('tasks') or {}
+        if task_name in tasks_map:
+            del tasks_map[task_name]
+            tf_data['tasks'] = tasks_map
+            with open(taskfile_path, 'w', encoding='utf-8') as f:
+                yaml.dump(tf_data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            _invalidate_cache()
+            return jsonify({'ok': True, 'deleted': task_name})
+
+    return jsonify({'error': f'Task "{task_name}" not found'}), 404
+
+
+@app.route('/api/v1/tasks/<task_name>/history', methods=['GET'])
+def api_task_history(task_name):
+    """获取任务的执行历史"""
+    limit = request.args.get('limit', 20, type=int)
+    history = []
+
+    # 从 jobs (内存)
+    for jid, job in sorted(jobs.items(), key=lambda x: x[1].get('created_at', ''), reverse=True):
+        if job.get('task') == task_name:
+            history.append({
+                'id': jid, 'type': 'task',
+                'name': job.get('task'), 'status': job.get('status'),
+                'started_at': job.get('started_at'), 'finished_at': job.get('finished_at'),
+                'created_at': job.get('created_at')
+            })
+    # 从 jobs (DB)
+    with db_lock:
+        with get_db() as conn:
+            rows = conn.execute(
+                'SELECT id, task, status, started_at, finished_at, created_at FROM jobs WHERE task = ? ORDER BY created_at DESC LIMIT ?',
+                (task_name, limit)
+            ).fetchall()
+            seen = {h['id'] for h in history}
+            for r in rows:
+                if r['id'] not in seen:
+                    history.append({
+                        'id': r['id'], 'type': 'task',
+                        'name': r['task'], 'status': r['status'],
+                        'started_at': r['started_at'], 'finished_at': r['finished_at'],
+                        'created_at': r['created_at']
+                    })
+
+    history.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+    return jsonify({'history': history[:limit]})
 
 
 @app.route('/api/v1/tasks/run', methods=['POST'])
@@ -406,7 +607,7 @@ def api_run_task():
 
     # 如果没有指定节点，在本地执行
     if not node_id:
-        _execute_job_local(job_id)
+        Thread(target=_execute_job_local, args=(job_id,), daemon=True).start()
     else:
         socketio.emit('job_assigned', job, room=node_id)
 
@@ -423,12 +624,7 @@ def _execute_job_local(job_id):
     job['started_at'] = datetime.now().isoformat()
     socketio.emit('job_update', job)
 
-    # 使用 task 直接执行 (避免 ez ensure_deps 在 Docker 中的问题)
-    task_bin = os.path.join(EZ_ROOT, 'dep', 'task')
-    if not os.path.isfile(task_bin):
-        import shutil
-        task_bin = shutil.which('task') or 'task'
-
+    task_bin = _get_task_bin()
     cmd = [task_bin, '-t', os.path.join(EZ_ROOT, 'Taskfile.yml'), job['task']]
     env = os.environ.copy()
     for k, v in job.get('vars', {}).items():
@@ -453,7 +649,7 @@ def _execute_job_local(job_id):
     with db_lock:
         with get_db() as conn:
             conn.execute('''
-                INSERT INTO jobs (id, task, node_id, vars, status, exit_code, logs, started_at, finished_at)
+                INSERT OR REPLACE INTO jobs (id, task, node_id, vars, status, exit_code, logs, started_at, finished_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (job_id, job['task'], job.get('node_id'), json.dumps(job.get('vars', {})),
                   job['status'], job.get('exit_code'), job.get('logs'),
@@ -477,9 +673,15 @@ def api_list_jobs():
 @app.route('/api/v1/jobs/<job_id>', methods=['GET'])
 def api_get_job(job_id):
     """获取执行详情"""
-    if job_id not in jobs:
-        return jsonify({'error': 'Job not found'}), 404
-    return jsonify(jobs[job_id])
+    if job_id in jobs:
+        return jsonify(jobs[job_id])
+    # 从 DB 查
+    with db_lock:
+        with get_db() as conn:
+            row = conn.execute('SELECT * FROM jobs WHERE id = ?', (job_id,)).fetchone()
+    if row:
+        return jsonify(dict(row))
+    return jsonify({'error': 'Job not found'}), 404
 
 
 @app.route('/api/v1/jobs/<job_id>/logs', methods=['GET'])
@@ -540,6 +742,239 @@ def api_report_job_result(job_id):
 
     socketio.emit('job_update', job)
     return jsonify({'status': 'ok'})
+
+
+# =============================================================================
+# API Routes - Executions (统一视图)
+# =============================================================================
+
+@app.route('/api/v1/executions', methods=['GET'])
+def api_list_executions():
+    """统一执行列表: 合并 jobs + plan_runs + cli executions"""
+    exec_type = request.args.get('type', 'all')
+    status_filter = request.args.get('status', '')
+    search = request.args.get('search', '').lower()
+    limit = request.args.get('limit', 50, type=int)
+
+    results = []
+
+    # Jobs (task runs)
+    if exec_type in ('all', 'task'):
+        # 从内存
+        for jid, job in jobs.items():
+            if status_filter and job.get('status') != status_filter:
+                continue
+            if search and search not in (job.get('task') or '').lower():
+                continue
+            results.append({
+                'id': jid, 'type': 'task',
+                'name': job.get('task', ''),
+                'status': job.get('status', 'unknown'),
+                'started_at': job.get('started_at'),
+                'finished_at': job.get('finished_at'),
+                'created_at': job.get('created_at'),
+                'node_id': job.get('node_id'),
+            })
+        # 从 DB (补充已不在内存中的)
+        seen_ids = {r['id'] for r in results}
+        with db_lock:
+            with get_db() as conn:
+                rows = conn.execute(
+                    'SELECT id, task, node_id, status, started_at, finished_at, created_at FROM jobs ORDER BY created_at DESC LIMIT ?',
+                    (limit * 2,)
+                ).fetchall()
+                for r in rows:
+                    if r['id'] not in seen_ids:
+                        if status_filter and r['status'] != status_filter:
+                            continue
+                        if search and search not in (r['task'] or '').lower():
+                            continue
+                        results.append({
+                            'id': r['id'], 'type': 'task',
+                            'name': r['task'], 'status': r['status'],
+                            'started_at': r['started_at'], 'finished_at': r['finished_at'],
+                            'created_at': r['created_at'], 'node_id': r['node_id'],
+                        })
+
+    # Plan runs
+    if exec_type in ('all', 'plan'):
+        with db_lock:
+            with get_db() as conn:
+                rows = conn.execute(
+                    'SELECT id, plan_name, status, duration, total_steps, completed_steps, started_at, finished_at, created_at FROM plan_runs ORDER BY created_at DESC LIMIT ?',
+                    (limit * 2,)
+                ).fetchall()
+                for r in rows:
+                    if status_filter and r['status'] != status_filter:
+                        continue
+                    if search and search not in (r['plan_name'] or '').lower():
+                        continue
+                    results.append({
+                        'id': r['id'], 'type': 'plan',
+                        'name': r['plan_name'], 'status': r['status'],
+                        'duration': r['duration'],
+                        'total_steps': r['total_steps'],
+                        'completed_steps': r['completed_steps'],
+                        'started_at': r['started_at'], 'finished_at': r['finished_at'],
+                        'created_at': r['created_at'],
+                    })
+
+    # CLI executions
+    if exec_type in ('all', 'cli'):
+        with db_lock:
+            with get_db() as conn:
+                rows = conn.execute(
+                    'SELECT id, task, exit_code, duration, host, timestamp, created_at FROM executions ORDER BY created_at DESC LIMIT ?',
+                    (limit * 2,)
+                ).fetchall()
+                for r in rows:
+                    cli_status = 'success' if r['exit_code'] == 0 else 'failed'
+                    if status_filter and cli_status != status_filter:
+                        continue
+                    if search and search not in (r['task'] or '').lower():
+                        continue
+                    results.append({
+                        'id': 'cli-' + str(r['id']), 'type': 'cli',
+                        'name': r['task'], 'status': cli_status,
+                        'duration': r['duration'],
+                        'host': r['host'],
+                        'created_at': r['timestamp'] or r['created_at'],
+                    })
+
+    # 按时间倒序
+    results.sort(key=lambda x: x.get('created_at') or '', reverse=True)
+    return jsonify({'executions': results[:limit]})
+
+
+# =============================================================================
+# API Routes - Dashboard
+# =============================================================================
+
+@app.route('/api/v1/dashboard', methods=['GET'])
+def api_dashboard():
+    """聚合 dashboard 数据"""
+    now = datetime.now()
+    cutoff_24h = (now - timedelta(hours=24)).isoformat()
+
+    # 活跃运行
+    active_runs = []
+    for jid, job in jobs.items():
+        if job.get('status') in ('running', 'pending'):
+            active_runs.append({
+                'id': jid, 'type': 'task',
+                'name': job.get('task'), 'status': job.get('status'),
+                'started_at': job.get('started_at')
+            })
+
+    with db_lock:
+        with get_db() as conn:
+            # 活跃 plan runs
+            rows = conn.execute(
+                "SELECT id, plan_name, status, total_steps, completed_steps, started_at FROM plan_runs WHERE status IN ('running', 'pending')"
+            ).fetchall()
+            for r in rows:
+                active_runs.append({
+                    'id': r['id'], 'type': 'plan',
+                    'name': r['plan_name'], 'status': r['status'],
+                    'total_steps': r['total_steps'], 'completed_steps': r['completed_steps'],
+                    'started_at': r['started_at']
+                })
+
+            # 24h 失败
+            failed_24h = []
+            # jobs
+            rows = conn.execute(
+                "SELECT id, task, status, finished_at FROM jobs WHERE status IN ('failed', 'error') AND finished_at >= ?",
+                (cutoff_24h,)
+            ).fetchall()
+            for r in rows:
+                failed_24h.append({
+                    'id': r['id'], 'type': 'task',
+                    'name': r['task'], 'status': r['status'],
+                    'finished_at': r['finished_at']
+                })
+            # from memory
+            for jid, job in jobs.items():
+                if job.get('status') in ('failed', 'error') and (job.get('finished_at') or '') >= cutoff_24h:
+                    if not any(f['id'] == jid for f in failed_24h):
+                        failed_24h.append({
+                            'id': jid, 'type': 'task',
+                            'name': job.get('task'), 'status': job.get('status'),
+                            'finished_at': job.get('finished_at')
+                        })
+            # plan runs
+            rows = conn.execute(
+                "SELECT id, plan_name, status, finished_at FROM plan_runs WHERE status IN ('failed', 'error') AND finished_at >= ?",
+                (cutoff_24h,)
+            ).fetchall()
+            for r in rows:
+                failed_24h.append({
+                    'id': r['id'], 'type': 'plan',
+                    'name': r['plan_name'], 'status': r['status'],
+                    'finished_at': r['finished_at']
+                })
+
+            # 24h stats
+            total_24h = 0
+            success_24h = 0
+            # From memory jobs
+            for job in jobs.values():
+                if (job.get('created_at') or '') >= cutoff_24h:
+                    total_24h += 1
+                    if job.get('status') == 'success':
+                        success_24h += 1
+            # From DB jobs
+            row = conn.execute(
+                "SELECT COUNT(*) as c FROM jobs WHERE created_at >= ?", (cutoff_24h,)
+            ).fetchone()
+            db_total = row['c'] if row else 0
+            row = conn.execute(
+                "SELECT COUNT(*) as c FROM jobs WHERE status = 'success' AND created_at >= ?", (cutoff_24h,)
+            ).fetchone()
+            db_success = row['c'] if row else 0
+
+            # CLI
+            row = conn.execute(
+                "SELECT COUNT(*) as c FROM executions WHERE created_at >= ?", (cutoff_24h,)
+            ).fetchone()
+            cli_total = row['c'] if row else 0
+            row = conn.execute(
+                "SELECT COUNT(*) as c FROM executions WHERE exit_code = 0 AND created_at >= ?", (cutoff_24h,)
+            ).fetchone()
+            cli_success = row['c'] if row else 0
+
+            # Plan runs
+            row = conn.execute(
+                "SELECT COUNT(*) as c FROM plan_runs WHERE created_at >= ?", (cutoff_24h,)
+            ).fetchone()
+            plan_total = row['c'] if row else 0
+            row = conn.execute(
+                "SELECT COUNT(*) as c FROM plan_runs WHERE status = 'success' AND created_at >= ?", (cutoff_24h,)
+            ).fetchone()
+            plan_success = row['c'] if row else 0
+
+    total = total_24h + db_total + cli_total + plan_total
+    success = success_24h + db_success + cli_success + plan_success
+    success_rate = round(success / total * 100, 1) if total > 0 else 0
+
+    # 节点摘要
+    online_nodes = sum(1 for n in nodes.values() if n.get('status') == 'online')
+    total_nodes = len(nodes)
+
+    return jsonify({
+        'active_runs': active_runs,
+        'failed_24h': failed_24h,
+        'stats_24h': {
+            'total': total,
+            'success': success,
+            'failed': len(failed_24h),
+            'success_rate': success_rate
+        },
+        'nodes_summary': {
+            'online': online_nodes,
+            'total': total_nodes
+        }
+    })
 
 
 # =============================================================================
@@ -680,7 +1115,7 @@ def api_stats_report():
 
 
 @app.route('/api/v1/stats/executions', methods=['GET'])
-def api_executions():
+def api_cli_executions():
     """获取 CLI 上报的执行历史"""
     limit = request.args.get('limit', 50, type=int)
     with db_lock:
@@ -985,8 +1420,15 @@ def api_save_plan_yaml(plan_name):
 # API Routes - Plans
 # =============================================================================
 
-@app.route('/api/v1/plans', methods=['GET'])
-def api_list_plans():
+@app.route('/api/v1/plans', methods=['GET', 'POST'])
+def api_plans():
+    """GET: 列出所有计划; POST: 创建计划"""
+    if request.method == 'POST':
+        return _api_create_plan()
+    return _api_list_plans()
+
+
+def _api_list_plans():
     """列出所有计划 (PyYAML)"""
     plans = []
     plans_dir = os.path.join(EZ_ROOT, 'plans')
@@ -995,18 +1437,73 @@ def api_list_plans():
             if f.endswith('.yml') or f.endswith('.yaml'):
                 name = os.path.splitext(f)[0]
                 desc = ''
+                step_count = 0
                 try:
                     plan_data = _load_yaml_file(os.path.join(plans_dir, f))
                     desc = plan_data.get('name', '') or plan_data.get('desc', '')
+                    step_count = len(plan_data.get('steps') or [])
                 except Exception:
                     pass
-                plans.append({'name': name, 'file': f, 'desc': desc})
+
+                # 最近执行
+                last_run = None
+                with db_lock:
+                    with get_db() as conn:
+                        row = conn.execute(
+                            'SELECT id, status, finished_at FROM plan_runs WHERE plan_name = ? ORDER BY created_at DESC LIMIT 1',
+                            (name,)
+                        ).fetchone()
+                        if row:
+                            last_run = {'id': row['id'], 'status': row['status'], 'finished_at': row['finished_at']}
+
+                plans.append({
+                    'name': name, 'file': f, 'desc': desc,
+                    'step_count': step_count, 'last_run': last_run
+                })
 
     return jsonify({'plans': plans})
 
 
-@app.route('/api/v1/plans/<plan_name>', methods=['GET'])
-def api_get_plan(plan_name):
+def _api_create_plan():
+    """创建计划"""
+    data = request.json or {}
+    name = data.get('name', '').strip()
+    desc = data.get('desc', '')
+    steps = data.get('steps', [])
+
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    if not re.match(r'^[a-zA-Z0-9_-]+$', name):
+        return jsonify({'error': 'name 只允许字母、数字、下划线和连字符'}), 400
+
+    plans_dir = os.path.join(EZ_ROOT, 'plans')
+    os.makedirs(plans_dir, exist_ok=True)
+    plan_file = os.path.join(plans_dir, f'{name}.yml')
+
+    if os.path.isfile(plan_file):
+        return jsonify({'error': f'Plan "{name}" already exists'}), 409
+
+    plan_data = {
+        'name': name,
+        'desc': desc,
+        'steps': steps or [{'name': 'step1', 'task': 'default'}]
+    }
+    yaml_content = yaml.dump(plan_data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    with open(plan_file, 'w', encoding='utf-8') as f:
+        f.write(yaml_content)
+
+    return jsonify({'ok': True, 'name': name, 'file': f'plans/{name}.yml'})
+
+
+@app.route('/api/v1/plans/<plan_name>', methods=['GET', 'DELETE'])
+def api_get_or_delete_plan(plan_name):
+    """GET: 获取计划详情; DELETE: 删除计划"""
+    if request.method == 'DELETE':
+        return _api_delete_plan(plan_name)
+    return _api_get_plan(plan_name)
+
+
+def _api_get_plan(plan_name):
     """获取计划详情 (PyYAML)"""
     try:
         plan_file = os.path.join(EZ_ROOT, 'plans', f'{plan_name}.yml')
@@ -1041,11 +1538,36 @@ def api_get_plan(plan_name):
         return jsonify({'error': str(e)}), 500
 
 
+def _api_delete_plan(plan_name):
+    """删除计划"""
+    plan_file = os.path.join(EZ_ROOT, 'plans', f'{plan_name}.yml')
+    if not os.path.isfile(plan_file):
+        plan_file = os.path.join(EZ_ROOT, 'plans', f'{plan_name}.yaml')
+    if not os.path.isfile(plan_file):
+        return jsonify({'error': f'Plan "{plan_name}" not found'}), 404
+
+    os.remove(plan_file)
+    return jsonify({'ok': True, 'deleted': plan_name})
+
+
 @app.route('/api/v1/plans/<plan_name>/run', methods=['POST'])
 def api_run_plan(plan_name):
-    """执行计划"""
+    """执行计划 — 逐步骤执行"""
     data = request.json or {}
     task_vars = data.get('vars', {})
+    trigger_type = data.get('trigger_type', 'manual')
+
+    # 加载 plan
+    plan_file = os.path.join(EZ_ROOT, 'plans', f'{plan_name}.yml')
+    if not os.path.isfile(plan_file):
+        plan_file = os.path.join(EZ_ROOT, 'plans', f'{plan_name}.yaml')
+    if not os.path.isfile(plan_file):
+        return jsonify({'error': f'Plan not found: {plan_name}'}), 404
+
+    plan_data = _load_yaml_file(plan_file)
+    steps = plan_data.get('steps', [])
+    if not steps:
+        return jsonify({'error': 'Plan has no steps'}), 400
 
     run_id = str(uuid.uuid4())[:8]
 
@@ -1053,44 +1575,187 @@ def api_run_plan(plan_name):
     with db_lock:
         with get_db() as conn:
             conn.execute(
-                '''INSERT INTO plan_runs (id, plan_name, status, params, started_at)
-                   VALUES (?, ?, 'running', ?, ?)''',
-                (run_id, plan_name, json.dumps(task_vars), datetime.now().isoformat())
+                '''INSERT INTO plan_runs (id, plan_name, status, params, trigger_type, total_steps, started_at)
+                   VALUES (?, ?, 'running', ?, ?, ?, ?)''',
+                (run_id, plan_name, json.dumps(task_vars), trigger_type, len(steps), datetime.now().isoformat())
+            )
+            # 插入每个步骤
+            for step in steps:
+                conn.execute(
+                    '''INSERT INTO plan_run_steps (run_id, step_name, task_name, status)
+                       VALUES (?, ?, ?, 'pending')''',
+                    (run_id, step.get('name', ''), step.get('task', ''))
+                )
+            conn.commit()
+
+    socketio.emit('plan_update', {'run_id': run_id, 'plan_name': plan_name, 'status': 'running'})
+
+    # 在后台线程逐步骤执行
+    Thread(target=_run_plan_steps, args=(run_id, plan_name, steps, task_vars), daemon=True).start()
+    return jsonify({'run_id': run_id, 'status': 'running'})
+
+
+def _run_plan_steps(run_id, plan_name, steps, global_vars):
+    """逐步骤执行 plan (拓扑排序)"""
+    task_bin = _get_task_bin()
+    step_map = {s.get('name', ''): s for s in steps}
+
+    # 拓扑排序
+    completed = set()
+    failed_steps = set()
+    start_time = datetime.now()
+
+    def can_run(step):
+        needs = step.get('needs') or []
+        for dep in needs:
+            if dep in failed_steps:
+                return 'skip'
+            if dep not in completed:
+                return 'wait'
+        return 'ready'
+
+    remaining = [s.get('name', '') for s in steps]
+    completed_count = 0
+
+    while remaining:
+        progressed = False
+        for step_name in list(remaining):
+            step = step_map.get(step_name)
+            if not step:
+                remaining.remove(step_name)
+                continue
+
+            status = can_run(step)
+            if status == 'skip':
+                # 依赖失败, 跳过
+                remaining.remove(step_name)
+                _update_step(run_id, step_name, 'skipped')
+                socketio.emit('plan_step_update', {
+                    'run_id': run_id, 'step_name': step_name, 'status': 'skipped'
+                })
+                progressed = True
+            elif status == 'ready':
+                remaining.remove(step_name)
+                progressed = True
+
+                # 执行该步骤
+                _update_step(run_id, step_name, 'running', started_at=datetime.now().isoformat())
+                socketio.emit('plan_step_update', {
+                    'run_id': run_id, 'step_name': step_name, 'status': 'running'
+                })
+
+                task_name = step.get('task', '')
+                step_vars = dict(global_vars)
+                step_vars.update(step.get('vars') or {})
+
+                cmd = [task_bin, '-t', os.path.join(EZ_ROOT, 'Taskfile.yml'), task_name]
+                env = os.environ.copy()
+                for k, v in step_vars.items():
+                    env[str(k)] = str(v)
+
+                step_start = datetime.now()
+                try:
+                    result = subprocess.run(
+                        cmd, capture_output=True, text=True, timeout=3600,
+                        env=env, cwd=EZ_ROOT
+                    )
+                    step_end = datetime.now()
+                    duration = (step_end - step_start).total_seconds()
+                    logs = result.stdout + result.stderr
+                    exit_code = result.returncode
+                    step_status = 'success' if exit_code == 0 else 'failed'
+                except subprocess.TimeoutExpired:
+                    step_end = datetime.now()
+                    duration = (step_end - step_start).total_seconds()
+                    logs = 'Step timed out'
+                    exit_code = -1
+                    step_status = 'failed'
+                except Exception as e:
+                    step_end = datetime.now()
+                    duration = (step_end - step_start).total_seconds()
+                    logs = str(e)
+                    exit_code = -1
+                    step_status = 'failed'
+
+                _update_step(run_id, step_name, step_status,
+                             exit_code=exit_code, logs=logs, duration=duration,
+                             finished_at=step_end.isoformat())
+
+                if step_status == 'success':
+                    completed.add(step_name)
+                else:
+                    failed_steps.add(step_name)
+
+                completed_count += 1
+                # 更新 plan_runs completed_steps
+                with db_lock:
+                    with get_db() as conn:
+                        conn.execute(
+                            'UPDATE plan_runs SET completed_steps = ? WHERE id = ?',
+                            (completed_count, run_id)
+                        )
+                        conn.commit()
+
+                socketio.emit('plan_step_update', {
+                    'run_id': run_id, 'step_name': step_name,
+                    'status': step_status, 'exit_code': exit_code, 'duration': duration
+                })
+
+        if not progressed:
+            # 死锁或所有剩余都在等待
+            for step_name in remaining:
+                _update_step(run_id, step_name, 'skipped')
+            break
+
+        time.sleep(0.1)
+
+    # 完成 plan run
+    end_time = datetime.now()
+    total_duration = (end_time - start_time).total_seconds()
+    final_status = 'success' if not failed_steps else 'failed'
+
+    with db_lock:
+        with get_db() as conn:
+            conn.execute(
+                '''UPDATE plan_runs SET status=?, finished_at=?, duration=?, completed_steps=?
+                   WHERE id=?''',
+                (final_status, end_time.isoformat(), total_duration, completed_count, run_id)
             )
             conn.commit()
 
-    # 在后台线程执行
-    import threading
-    def _run():
-        cmd = [os.path.join(EZ_ROOT, 'ez'), 'plan', 'run', plan_name]
-        for k, v in task_vars.items():
-            cmd.append(f'{k}={v}')
+    socketio.emit('plan_update', {'run_id': run_id, 'plan_name': plan_name, 'status': final_status})
 
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-            status = 'success' if result.returncode == 0 else 'failed'
-            with db_lock:
-                with get_db() as conn:
-                    conn.execute(
-                        '''UPDATE plan_runs SET status=?, finished_at=?, steps_json=?
-                           WHERE id=?''',
-                        (status, datetime.now().isoformat(),
-                         json.dumps({'stdout': result.stdout[-2000:], 'stderr': result.stderr[-2000:]}),
-                         run_id)
-                    )
-                    conn.commit()
-            socketio.emit('plan_update', {'run_id': run_id, 'status': status})
-        except Exception as e:
-            with db_lock:
-                with get_db() as conn:
-                    conn.execute(
-                        'UPDATE plan_runs SET status=?, finished_at=? WHERE id=?',
-                        ('error', datetime.now().isoformat(), run_id)
-                    )
-                    conn.commit()
 
-    threading.Thread(target=_run, daemon=True).start()
-    return jsonify({'run_id': run_id, 'status': 'running'})
+def _update_step(run_id, step_name, status, **kwargs):
+    """更新步骤状态"""
+    with db_lock:
+        with get_db() as conn:
+            sets = ['status = ?']
+            vals = [status]
+            for k, v in kwargs.items():
+                sets.append(f'{k} = ?')
+                vals.append(v)
+            vals.extend([run_id, step_name])
+            conn.execute(
+                f'UPDATE plan_run_steps SET {", ".join(sets)} WHERE run_id = ? AND step_name = ?',
+                vals
+            )
+            conn.commit()
+
+
+@app.route('/api/v1/plans/<plan_name>/hook', methods=['POST'])
+def api_plan_webhook(plan_name):
+    """Webhook 触发执行"""
+    data = request.json or {}
+    data['trigger_type'] = 'webhook'
+    # 复用 run plan
+    with app.test_request_context(
+        f'/api/v1/plans/{plan_name}/run',
+        method='POST',
+        json=data,
+        content_type='application/json'
+    ):
+        return api_run_plan(plan_name)
 
 
 @app.route('/api/v1/plans/run-task', methods=['POST'])
@@ -1126,31 +1791,60 @@ def api_run_single_task():
         'created_at': datetime.now().isoformat()
     }
     jobs[job_id] = job
-    _execute_job_local(job_id)
-    return jsonify({'job_id': job_id, 'status': job['status']})
+    Thread(target=_execute_job_local, args=(job_id,), daemon=True).start()
+    return jsonify({'job_id': job_id, 'status': 'running'})
 
 
 @app.route('/api/v1/plans/runs', methods=['GET'])
 def api_list_plan_runs():
     """获取计划执行历史"""
     limit = request.args.get('limit', 20, type=int)
+    plan_name = request.args.get('plan', '')
     with db_lock:
         with get_db() as conn:
-            rows = conn.execute(
-                'SELECT * FROM plan_runs ORDER BY created_at DESC LIMIT ?', (limit,)
-            ).fetchall()
+            if plan_name:
+                rows = conn.execute(
+                    'SELECT * FROM plan_runs WHERE plan_name = ? ORDER BY created_at DESC LIMIT ?',
+                    (plan_name, limit)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    'SELECT * FROM plan_runs ORDER BY created_at DESC LIMIT ?', (limit,)
+                ).fetchall()
     return jsonify({'runs': [dict(r) for r in rows]})
 
 
 @app.route('/api/v1/plans/runs/<run_id>', methods=['GET'])
 def api_get_plan_run(run_id):
-    """获取单次计划执行状态"""
+    """获取单次计划执行状态 + 步骤详情"""
     with db_lock:
         with get_db() as conn:
             row = conn.execute('SELECT * FROM plan_runs WHERE id = ?', (run_id,)).fetchone()
+            if not row:
+                return jsonify({'error': 'not found'}), 404
+
+            steps = conn.execute(
+                'SELECT * FROM plan_run_steps WHERE run_id = ? ORDER BY id ASC',
+                (run_id,)
+            ).fetchall()
+
+    result = dict(row)
+    result['steps'] = [dict(s) for s in steps]
+    return jsonify(result)
+
+
+@app.route('/api/v1/plans/runs/<run_id>/steps/<step_name>/logs', methods=['GET'])
+def api_step_logs(run_id, step_name):
+    """获取单步日志"""
+    with db_lock:
+        with get_db() as conn:
+            row = conn.execute(
+                'SELECT logs, status FROM plan_run_steps WHERE run_id = ? AND step_name = ?',
+                (run_id, step_name)
+            ).fetchone()
     if not row:
-        return jsonify({'error': 'not found'}), 404
-    return jsonify(dict(row))
+        return jsonify({'error': 'Step not found'}), 404
+    return jsonify({'logs': row['logs'] or '', 'status': row['status']})
 
 
 # =============================================================================

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>任务 - EZ 管理平台</title>
     <link rel="stylesheet" href="/static/css/style.css">
-    <script src="/static/js/socket.io.min.js"></script>
+    <script src="/static/js/common.js"></script>
 </head>
 <body>
     <nav class="navbar">
@@ -14,614 +14,159 @@
             <a href="/">总览</a>
             <a href="/tasks" class="active">任务</a>
             <a href="/plans">计划</a>
-            <a href="/jobs">执行记录</a>
+            <a href="/executions">执行记录</a>
             <a href="/nodes">节点</a>
-            <a href="/charts">统计</a>
+            <a href="/settings">设置</a>
         </div>
     </nav>
 
     <main class="container">
         <div class="toast-container" id="toast-container"></div>
-        <div class="page-header">
-            <h1>任务浏览器</h1>
-            <p>浏览和管理所有任务 (行内 / 目录 / 工具)</p>
+
+        <div class="page-header-row">
+            <div class="page-header">
+                <h1>任务定义</h1>
+                <p>创建、浏览和编辑任务定义</p>
+            </div>
+            <a href="/tasks/new" class="btn btn-primary">+ 新建任务</a>
         </div>
 
-        <div class="tasks-layout">
-            <!-- 左侧: 任务树 -->
-            <div class="card tasks-tree-card">
-                <h2>任务列表</h2>
-                <div class="tasks-toolbar">
-                    <button class="btn btn-sm btn-primary" id="btn-run-selected" disabled onclick="runSelected()">执行选中</button>
-                    <span id="selected-count" style="font-size:0.85rem;color:var(--text-muted);"></span>
-                </div>
-                <input type="text" class="task-filter" id="task-filter" placeholder="搜索任务..." oninput="filterTasks(this.value)">
-                <div id="task-tree" class="task-tree">
-                    <div class="loading">加载中...</div>
-                </div>
-            </div>
+        <!-- Filter bar -->
+        <div class="filter-bar">
+            <input type="text" id="search-input" placeholder="搜索任务名..." oninput="filterTasks()">
+            <select id="type-filter" onchange="filterTasks()">
+                <option value="">全部类型</option>
+                <option value="dir">文件夹 (dir)</option>
+                <option value="inline">行内 (inline)</option>
+                <option value="tool">工具 (tool)</option>
+                <option value="namespace">命名空间</option>
+            </select>
+        </div>
 
-            <!-- 右侧: 任务详情 -->
-            <div class="card tasks-detail-card">
-                <h2>任务详情</h2>
-                <div id="task-detail">
-                    <div class="empty">点击左侧任务查看详情</div>
-                </div>
-            </div>
+        <!-- Table -->
+        <div class="card" style="padding:0; overflow:hidden;">
+            <table class="table" id="task-table">
+                <thead>
+                    <tr>
+                        <th>名称</th>
+                        <th style="width:80px;">类型</th>
+                        <th>描述</th>
+                        <th style="width:60px;">参数</th>
+                        <th style="width:70px;"></th>
+                    </tr>
+                </thead>
+                <tbody id="task-body">
+                    <tr><td colspan="5" class="loading">加载中...</td></tr>
+                </tbody>
+            </table>
         </div>
     </main>
 
     <script>
-        var currentTask = null;
-        var checkedTasks = new Set();
-        var taskTreeData = [];
+        var allTasks = [];
 
-        window.showToast = function(msg, type, duration) {
-            type = type || 'info';
-            duration = duration || 3000;
-            var container = document.getElementById('toast-container');
-            var toast = document.createElement('div');
-            toast.className = 'toast toast-' + type;
-            toast.textContent = msg;
-            container.appendChild(toast);
-            setTimeout(function() {
-                toast.style.animation = 'toast-out 0.3s ease-in forwards';
-                setTimeout(function() { toast.remove(); }, 300);
-            }, duration);
-        };
-
-        function escapeHtml(str) {
-            var div = document.createElement('div');
-            div.textContent = str || '';
-            return div.innerHTML;
-        }
-
-        function updateSelectedCount() {
-            var countEl = document.getElementById('selected-count');
-            var btn = document.getElementById('btn-run-selected');
-            if (checkedTasks.size > 0) {
-                countEl.textContent = '已选 ' + checkedTasks.size + ' 个';
-                btn.disabled = false;
-            } else {
-                countEl.textContent = '';
-                btn.disabled = true;
-            }
-        }
-
-        function onCheckChange(taskName, checked) {
-            if (checked) checkedTasks.add(taskName);
-            else checkedTasks.delete(taskName);
-            updateSelectedCount();
-        }
-
-        function renderBadges(task) {
-            var html = '';
-            if (task.type === 'dir') {
-                html += '<span class="badge badge-dir">目录</span>';
-            } else if (task.type === 'tool') {
-                html += '<span class="badge badge-tool">工具</span>';
-            }
-            if (task.has_params) {
-                html += '<span class="badge badge-params">参数</span>';
-            }
-            return html;
-        }
-
-        function renderTaskItem(task) {
-            return '<div class="task-item" data-task-name="' + escapeHtml(task.name) + '" onclick="showTaskDetail(\'' + escapeHtml(task.name) + '\')">' +
-                '<span class="task-name">' + escapeHtml(task.name) + '</span>' +
-                renderBadges(task) +
-                '<span class="task-desc">' + escapeHtml(task.desc) + '</span>' +
-                '</div>';
-        }
-
-        function renderNamespaceGroup(group) {
-            var html = '<details class="task-group" data-group-name="' + escapeHtml(group.name) + '">';
-            html += '<summary>' +
-                '<input type="checkbox" class="task-check" onclick="event.stopPropagation(); toggleGroupCheck(this, \'' + escapeHtml(group.name) + '\')">' +
-                '<span class="group-name">' + escapeHtml(group.name) + ':*</span>' +
-                '<span class="group-count">' + escapeHtml(group.desc) + '</span>' +
-                '</summary>';
-            html += '<div class="task-children">';
-            if (group.children && group.children.length > 0) {
-                group.children.forEach(function(child) {
-                    html += '<div class="task-item" data-task-name="' + escapeHtml(child.name) + '" onclick="showTaskDetail(\'' + escapeHtml(child.name) + '\')">' +
-                        '<input type="checkbox" class="task-check" onclick="event.stopPropagation(); onCheckChange(\'' + escapeHtml(child.name) + '\', this.checked)">' +
-                        '<span class="task-name">' + escapeHtml(child.name) + '</span>' +
-                        renderBadges(child) +
-                        '<span class="task-desc">' + escapeHtml(child.desc) + '</span>' +
-                        '</div>';
-                });
-            }
-            html += '</div></details>';
-            return html;
-        }
-
-        function toggleGroupCheck(checkbox, groupName) {
-            var details = checkbox.closest('.task-group');
-            var childChecks = details.querySelectorAll('.task-children .task-check');
-            childChecks.forEach(function(cb) {
-                cb.checked = checkbox.checked;
-                var taskItem = cb.closest('.task-item');
-                var nameEl = taskItem.querySelector('.task-name');
-                if (nameEl) onCheckChange(nameEl.textContent, checkbox.checked);
-            });
-        }
-
-        function filterTasks(query) {
-            query = (query || '').toLowerCase();
-            document.querySelectorAll('#task-tree > .task-item').forEach(function(el) {
-                var name = (el.getAttribute('data-task-name') || '').toLowerCase();
-                var desc = (el.querySelector('.task-desc') || {}).textContent || '';
-                el.style.display = (name.indexOf(query) !== -1 || desc.toLowerCase().indexOf(query) !== -1) ? '' : 'none';
-            });
-            document.querySelectorAll('#task-tree > .task-group').forEach(function(el) {
-                var groupName = (el.getAttribute('data-group-name') || '').toLowerCase();
-                var children = el.querySelectorAll('.task-item');
-                var anyVisible = false;
-                children.forEach(function(child) {
-                    var name = (child.getAttribute('data-task-name') || '').toLowerCase();
-                    var desc = (child.querySelector('.task-desc') || {}).textContent || '';
-                    var match = name.indexOf(query) !== -1 || desc.toLowerCase().indexOf(query) !== -1;
-                    child.style.display = match ? '' : 'none';
-                    if (match) anyVisible = true;
-                });
-                el.style.display = (groupName.indexOf(query) !== -1 || anyVisible) ? '' : 'none';
-                if (query && anyVisible) el.open = true;
-            });
-        }
-
-        function findTaskInTree(taskName) {
-            for (var i = 0; i < taskTreeData.length; i++) {
-                var item = taskTreeData[i];
-                if (item.name === taskName) return item;
-                if (item.children) {
-                    for (var j = 0; j < item.children.length; j++) {
-                        if (item.children[j].name === taskName) return item.children[j];
-                    }
-                }
-            }
-            return null;
-        }
-
-        async function loadTaskTree() {
+        async function loadTasks() {
             try {
                 var res = await fetch('/api/v1/tasks/tree');
                 var data = await res.json();
-                var container = document.getElementById('task-tree');
-
-                taskTreeData = data.tree || [];
-
-                if (taskTreeData.length === 0) {
-                    container.innerHTML = '<div class="empty">未找到任务</div>';
-                    return;
-                }
-
-                var html = '';
-                taskTreeData.forEach(function(item) {
-                    if (item.type === 'namespace' && item.children) {
-                        html += renderNamespaceGroup(item);
-                    } else {
-                        html += renderTaskItem(item);
-                    }
-                });
-                container.innerHTML = html;
-
-                // 支持 URL 参数 ?select=taskName
-                var urlParams = new URLSearchParams(window.location.search);
-                var selectTask = urlParams.get('select');
-                if (selectTask) {
-                    showTaskDetail(selectTask);
-                }
+                allTasks = data.tree || [];
+                filterTasks();
             } catch (e) {
-                document.getElementById('task-tree').innerHTML =
-                    '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
+                document.getElementById('task-body').innerHTML =
+                    '<tr><td colspan="5" class="empty">加载失败: ' + escapeHtml(e.message) + '</td></tr>';
             }
         }
 
-        function renderParamForm(params) {
-            if (!params || params.length === 0) return '';
-            var html = '<div class="param-form-fields">';
-            params.forEach(function(p) {
-                var paramName = (p.name || '').toUpperCase();
-                var envKey = 'EZ_' + paramName;
-                html += '<div class="form-group">';
-                html += '<label>' + escapeHtml(p.name || '') + '</label>';
-                if (p.help) {
-                    html += '<span class="form-help">' + escapeHtml(p.help) + '</span>';
-                }
-                if (p.type === 'select' && p.options && p.options.length > 0) {
-                    html += '<select name="' + escapeHtml(envKey) + '">';
-                    p.options.forEach(function(opt) {
-                        var selected = (opt === p.default) ? ' selected' : '';
-                        html += '<option value="' + escapeHtml(opt) + '"' + selected + '>' + escapeHtml(opt) + '</option>';
+        function filterTasks() {
+            var search = (document.getElementById('search-input').value || '').toLowerCase();
+            var typeFilter = document.getElementById('type-filter').value;
+
+            var html = '';
+            var count = 0;
+
+            allTasks.forEach(function(task) {
+                if (task.type === 'namespace' && task.children) {
+                    var matchedChildren = (task.children || []).filter(function(c) {
+                        if (search && c.name.toLowerCase().indexOf(search) < 0 && (c.desc || '').toLowerCase().indexOf(search) < 0) return false;
+                        if (typeFilter && typeFilter !== 'namespace' && c.type !== typeFilter) return false;
+                        return true;
                     });
-                    html += '</select>';
-                } else {
-                    html += '<input type="text" name="' + escapeHtml(envKey) + '" value="' + escapeHtml(p.default || '') + '" placeholder="' + escapeHtml(p.default || '') + '">';
-                }
-                html += '</div>';
-            });
-            html += '</div>';
-            return html;
-        }
 
-        async function showTaskDetail(taskName) {
-            currentTask = taskName;
-            var container = document.getElementById('task-detail');
-            container.innerHTML = '<div class="loading">加载中...</div>';
+                    var nsMatch = (!search || task.name.toLowerCase().indexOf(search) >= 0) && (!typeFilter || typeFilter === 'namespace');
 
-            try {
-                var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName) + '/params');
-                var data = await res.json();
+                    if (nsMatch || matchedChildren.length > 0) {
+                        html += '<tr style="background:var(--bg-color);">' +
+                            '<td colspan="5" style="padding:0.5rem 0.8rem; font-weight:600; cursor:pointer;" onclick="toggleNs(this)">' +
+                            '<span class="ns-arrow" style="display:inline-block; transition:transform 0.2s; margin-right:0.3rem;">&#9660;</span>' +
+                            escapeHtml(task.name) +
+                            ' <span style="font-weight:400; color:var(--text-muted); font-size:0.82rem;">' + (task.children.length) + ' 个子任务</span>' +
+                            '</td></tr>';
+                        count++;
 
-                var taskInfo = findTaskInTree(taskName);
-                var isDir = taskInfo && taskInfo.type === 'dir';
-
-                var html = '<div class="detail-header">';
-                html += '<h3>' + escapeHtml(data.name) + '</h3>';
-                if (data.desc) {
-                    html += '<p style="color:var(--text-muted);margin:0.3rem 0 0;">' + escapeHtml(data.desc) + '</p>';
-                }
-                html += '</div>';
-
-                // 参数表单
-                html += '<form id="run-form" class="task-run-form" onsubmit="return handleRunSubmit(event)">';
-                if (data.params && data.params.length > 0) {
-                    html += '<h4 style="margin:1rem 0 0.6rem;font-size:0.95rem;">参数配置</h4>';
-                    html += renderParamForm(data.params);
-                }
-
-                // 节点选择
-                html += '<div class="form-group" style="margin-top:1rem; padding-top:0.8rem; border-top:1px solid var(--border);">';
-                html += '<label>执行节点</label>';
-                html += '<select id="node-select"><option value="">本地执行</option></select>';
-                html += '</div>';
-
-                html += '<div style="display:flex; gap:0.5rem; margin-top:0.8rem;">';
-                html += '<button type="submit" class="btn btn-primary" style="flex:1;">执行</button>';
-                html += '<button type="button" class="btn btn-secondary" onclick="createPlan(\'' + escapeHtml(data.name) + '\')" style="flex:0 0 auto;">创建计划</button>';
-                html += '<button type="button" class="btn btn-secondary" onclick="toggleYaml(\'' + escapeHtml(data.name) + '\')" style="flex:0 0 auto;">YAML</button>';
-                html += '</div>';
-                html += '</form>';
-
-                // 文件浏览器 (仅目录任务)
-                if (isDir) {
-                    html += '<div id="file-browser-section" style="margin-top:1rem; border-top:1px solid var(--border); padding-top:0.8rem;">';
-                    html += '<h4 style="margin:0 0 0.6rem; font-size:0.95rem;">文件浏览</h4>';
-                    html += '<div id="file-browser" class="file-browser"><div class="loading">加载中...</div></div>';
-                    html += '</div>';
-                }
-
-                // YAML 编辑区域 (默认隐藏)
-                html += '<div id="yaml-panel" style="display:none; margin-top:1rem; border-top:1px solid var(--border); padding-top:0.8rem;">';
-                html += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">';
-                html += '<h4 style="margin:0; font-size:0.95rem;">YAML 源文件</h4>';
-                html += '<span id="yaml-file-path" style="font-size:0.8rem; color:var(--text-muted);"></span>';
-                html += '</div>';
-                html += '<textarea id="yaml-editor" style="width:100%; min-height:200px; font-family:monospace; font-size:0.85rem; padding:0.6rem; border:1px solid var(--border); border-radius:6px; background:var(--bg-color,#f0f2f5); box-sizing:border-box; resize:vertical; tab-size:2;"></textarea>';
-                html += '<div style="display:flex; gap:0.5rem; margin-top:0.5rem;">';
-                html += '<button class="btn btn-sm btn-primary" onclick="saveYaml()">保存</button>';
-                html += '<span id="yaml-save-msg" style="font-size:0.8rem; color:var(--text-muted); line-height:2;"></span>';
-                html += '</div>';
-                html += '</div>';
-
-                container.innerHTML = html;
-                loadNodes();
-
-                // 加载文件浏览器
-                if (isDir) {
-                    loadFileBrowser(taskName);
-                }
-
-                // 高亮选中
-                document.querySelectorAll('.task-item').forEach(function(el) {
-                    el.classList.remove('active');
-                    var nameEl = el.querySelector('.task-name');
-                    if (nameEl && nameEl.textContent === taskName) {
-                        el.classList.add('active');
+                        matchedChildren.forEach(function(c) {
+                            html += renderTaskRow(c, true);
+                            count++;
+                        });
                     }
-                });
-            } catch (e) {
-                container.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
-            }
-        }
-
-        async function loadFileBrowser(taskName) {
-            var container = document.getElementById('file-browser');
-            if (!container) return;
-            try {
-                var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName) + '/files');
-                var data = await res.json();
-                if (data.error) {
-                    container.innerHTML = '<div class="empty">' + escapeHtml(data.error) + '</div>';
-                    return;
-                }
-                if (!data.files || data.files.length === 0) {
-                    container.innerHTML = '<div class="empty">没有文件</div>';
-                    return;
-                }
-                container.innerHTML = data.files.map(function(f) {
-                    var sizeStr = f.size < 1024 ? f.size + 'B' : Math.round(f.size / 1024) + 'KB';
-                    return '<div class="file-browser-item" onclick="viewFile(\'' + escapeHtml(taskName) + '\', \'' + escapeHtml(f.path) + '\')">' +
-                        '<span>' + escapeHtml(f.path) + '</span>' +
-                        '<span class="file-size">' + sizeStr + '</span>' +
-                        '</div>';
-                }).join('');
-            } catch (e) {
-                container.innerHTML = '<div class="empty">加载失败</div>';
-            }
-        }
-
-        async function viewFile(taskName, filePath) {
-            var container = document.getElementById('file-browser');
-            if (!container) return;
-            container.innerHTML = '<div class="loading">加载中...</div>';
-            try {
-                var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName) + '/files/' + encodeURIComponent(filePath));
-                var data = await res.json();
-                if (data.error) {
-                    container.innerHTML = '<div class="empty">' + escapeHtml(data.error) + '</div>';
-                    return;
-                }
-                var html = '<div class="file-content-view">';
-                html += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">';
-                html += '<strong style="font-size:0.85rem;">' + escapeHtml(filePath) + '</strong>';
-                html += '<button class="btn btn-sm btn-secondary" onclick="loadFileBrowser(\'' + escapeHtml(taskName) + '\')">返回列表</button>';
-                html += '</div>';
-                html += '<pre>' + escapeHtml(data.content) + '</pre>';
-                html += '</div>';
-                container.innerHTML = html;
-            } catch (e) {
-                container.innerHTML = '<div class="empty">加载失败</div>';
-            }
-        }
-
-        async function loadNodes() {
-            try {
-                var res = await fetch('/api/v1/nodes');
-                var data = await res.json();
-                var select = document.getElementById('node-select');
-                if (select && data.nodes) {
-                    select.innerHTML = '<option value="">本地执行</option>' +
-                        data.nodes.map(function(n) {
-                            return '<option value="' + escapeHtml(n.id) + '">' + escapeHtml(n.name) + '</option>';
-                        }).join('');
-                }
-            } catch (e) {
-                console.error('加载节点失败:', e);
-            }
-        }
-
-        function collectFormVars() {
-            var form = document.getElementById('run-form');
-            if (!form) return {};
-            var vars = {};
-            var fields = form.querySelectorAll('input[name], select[name]');
-            fields.forEach(function(f) {
-                if (f.name && f.name !== '' && f.id !== 'node-select') {
-                    var val = f.value.trim();
-                    if (val) vars[f.name] = val;
+                } else {
+                    if (search && task.name.toLowerCase().indexOf(search) < 0 && (task.desc || '').toLowerCase().indexOf(search) < 0) return;
+                    if (typeFilter && task.type !== typeFilter) return;
+                    html += renderTaskRow(task, false);
+                    count++;
                 }
             });
-            return vars;
-        }
 
-        async function submitRun(taskName, vars) {
-            var nodeEl = document.getElementById('node-select');
-            var node = nodeEl ? nodeEl.value : '';
-            var res = await fetch('/api/v1/tasks/run', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({task: taskName, node: node || null, vars: vars || {}})
-            });
-            var data = await res.json();
-            if (data.job_id) return data.job_id;
-            throw new Error(data.error || '未知错误');
-        }
-
-        async function handleRunSubmit(e) {
-            e.preventDefault();
-            if (!currentTask) return false;
-            var vars = collectFormVars();
-
-            try {
-                var jobId = await submitRun(currentTask, vars);
-                showToast('任务已提交: ' + jobId, 'success');
-                window.location.href = '/jobs?id=' + jobId;
-            } catch (err) {
-                showToast('提交失败: ' + err.message, 'error');
+            if (count === 0) {
+                html = '<tr><td colspan="5" class="empty">没有匹配的任务</td></tr>';
             }
-            return false;
+
+            document.getElementById('task-body').innerHTML = html;
         }
 
-        async function runSelected() {
-            if (checkedTasks.size === 0) return;
-            var tasks = Array.from(checkedTasks);
-            if (!confirm('确定执行 ' + tasks.length + ' 个任务?\n\n' + tasks.join('\n'))) return;
+        function renderTaskRow(task, isChild) {
+            var typeBadge = '';
+            if (task.type === 'dir') typeBadge = '<span class="badge badge-dir">dir</span>';
+            else if (task.type === 'tool') typeBadge = '<span class="badge badge-tool">tool</span>';
+            else if (task.type === 'inline') typeBadge = '<span class="badge badge-params">inline</span>';
+            else typeBadge = '<span class="badge">' + escapeHtml(task.type || '') + '</span>';
 
-            var results = [];
-            for (var i = 0; i < tasks.length; i++) {
-                try {
-                    var jobId = await submitRun(tasks[i], {});
-                    results.push(tasks[i] + ': ' + jobId);
-                } catch (err) {
-                    results.push(tasks[i] + ': 失败 - ' + err.message);
-                }
+            var paramCount = task.has_params ? (task.param_count || '?') : '0';
+
+            var actionHtml = '';
+            if (task.type === 'tool') {
+                actionHtml = '<a href="/tasks/' + encodeURIComponent(task.name) + '" class="btn btn-sm">查看</a>';
+            } else {
+                actionHtml = '<a href="/tasks/' + encodeURIComponent(task.name) + '" class="btn btn-sm btn-primary">编辑</a>';
             }
-            showToast('批量执行完成: ' + tasks.length + ' 个任务', 'success');
-            window.location.href = '/jobs';
+
+            return '<tr class="' + (isChild ? 'ns-child' : '') + '" onclick="window.location=\'/tasks/' + encodeURIComponent(task.name) + '\'" style="cursor:pointer;">' +
+                '<td style="' + (isChild ? 'padding-left:2rem;' : '') + '">' + escapeHtml(task.name) + '</td>' +
+                '<td>' + typeBadge + '</td>' +
+                '<td style="color:var(--text-muted); font-size:0.88rem;">' + escapeHtml(task.desc || '') + '</td>' +
+                '<td style="text-align:center;">' + escapeHtml(String(paramCount)) + '</td>' +
+                '<td onclick="event.stopPropagation();">' + actionHtml + '</td>' +
+                '</tr>';
         }
 
-        async function createPlan(taskName) {
-            var planName = prompt('输入计划名称 (字母/数字/下划线/连字符):');
-            if (!planName) return;
-
-            var vars = collectFormVars();
-
-            try {
-                var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName) + '/to-plan', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({plan_name: planName, vars: vars})
-                });
-                var data = await res.json();
-                if (data.ok) {
-                    showToast('计划已创建: ' + planName, 'success');
-                    setTimeout(function() { window.location.href = '/plans'; }, 1000);
+        function toggleNs(el) {
+            var row = el.parentElement;
+            var arrow = el.querySelector('.ns-arrow');
+            var hidden = false;
+            var next = row.nextElementSibling;
+            while (next && next.classList.contains('ns-child')) {
+                if (next.style.display === 'none') {
+                    next.style.display = '';
+                    hidden = false;
                 } else {
-                    showToast(data.error || '创建失败', 'error');
+                    next.style.display = 'none';
+                    hidden = true;
                 }
-            } catch (e) {
-                showToast('请求失败: ' + e.message, 'error');
+                next = next.nextElementSibling;
             }
+            arrow.style.transform = hidden ? 'rotate(-90deg)' : '';
         }
 
-        var currentYamlType = '';
-
-        async function toggleYaml(taskName) {
-            var panel = document.getElementById('yaml-panel');
-            if (!panel) return;
-            if (panel.style.display !== 'none') {
-                panel.style.display = 'none';
-                return;
-            }
-            panel.style.display = 'block';
-            var editor = document.getElementById('yaml-editor');
-            var pathEl = document.getElementById('yaml-file-path');
-            editor.value = '加载中...';
-            pathEl.textContent = '';
-
-            try {
-                var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName) + '/yaml');
-                var data = await res.json();
-                if (data.error) {
-                    editor.value = '# 错误: ' + data.error;
-                    return;
-                }
-                editor.value = data.yaml || '';
-                pathEl.textContent = data.file || '';
-                currentYamlType = data.type || '';
-            } catch (e) {
-                editor.value = '# 加载失败: ' + e.message;
-            }
-        }
-
-        async function saveYaml() {
-            if (!currentTask) return;
-            var editor = document.getElementById('yaml-editor');
-            var msgEl = document.getElementById('yaml-save-msg');
-            msgEl.textContent = '保存中...';
-            msgEl.style.color = 'var(--text-muted)';
-
-            try {
-                var res = await fetch('/api/v1/tasks/' + encodeURIComponent(currentTask) + '/yaml', {
-                    method: 'PUT',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({yaml: editor.value, type: currentYamlType})
-                });
-                var data = await res.json();
-                if (data.ok) {
-                    msgEl.textContent = '已保存';
-                    msgEl.style.color = 'var(--success, #52c41a)';
-                } else {
-                    msgEl.textContent = data.error || '保存失败';
-                    msgEl.style.color = 'var(--danger, #ff4d4f)';
-                }
-            } catch (e) {
-                msgEl.textContent = '保存失败: ' + e.message;
-                msgEl.style.color = 'var(--danger, #ff4d4f)';
-            }
-        }
-
-        // 初始加载
-        loadTaskTree();
+        loadTasks();
     </script>
-
-    <style>
-        .tasks-layout {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 1.5rem;
-        }
-
-        .tasks-toolbar {
-            display: flex;
-            align-items: center;
-            gap: 0.8rem;
-            margin-bottom: 0.8rem;
-        }
-
-        .task-item.active {
-            background: var(--primary-light, #e6f4ff);
-            border-left: 3px solid var(--primary);
-            padding-left: calc(0.8rem - 3px);
-        }
-
-        .badge-params {
-            background: var(--primary, #1677ff);
-            color: #fff;
-        }
-
-        .badge-tool {
-            background: #722ed1;
-            color: #fff;
-        }
-
-        .detail-header h3 {
-            margin: 0;
-            font-size: 1.15rem;
-        }
-
-        .task-run-form .form-group {
-            margin-bottom: 0.8rem;
-        }
-
-        .task-run-form label {
-            display: block;
-            font-weight: 500;
-            margin-bottom: 0.3rem;
-            font-size: 0.9rem;
-        }
-
-        .form-help {
-            display: block;
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            margin-bottom: 0.3rem;
-        }
-
-        .task-run-form input[type="text"],
-        .task-run-form select {
-            width: 100%;
-            padding: 0.5rem 0.7rem;
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            font-size: 0.9rem;
-            background: var(--card-bg, #fff);
-            box-sizing: border-box;
-        }
-
-        .task-run-form input[type="text"]:focus,
-        .task-run-form select:focus {
-            outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 2px rgba(22,119,255,0.15);
-        }
-
-        .param-form-fields {
-            background: var(--bg-color, #f0f2f5);
-            padding: 0.8rem;
-            border-radius: 8px;
-        }
-
-        .param-form-fields .form-group:last-child {
-            margin-bottom: 0;
-        }
-
-        @media (max-width: 1024px) {
-            .tasks-layout { grid-template-columns: 1fr; }
-        }
-    </style>
 </body>
 </html>

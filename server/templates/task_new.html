@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>新建任务 - EZ 管理平台</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="/static/js/common.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">EZ 管理平台</div>
+        <div class="nav-links">
+            <a href="/">总览</a>
+            <a href="/tasks" class="active">任务</a>
+            <a href="/plans">计划</a>
+            <a href="/executions">执行记录</a>
+            <a href="/nodes">节点</a>
+            <a href="/settings">设置</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="toast-container" id="toast-container"></div>
+
+        <div class="breadcrumb">
+            <a href="/tasks">任务</a>
+            <span class="sep">/</span>
+            <span>新建</span>
+        </div>
+
+        <div class="page-header">
+            <h1>新建任务</h1>
+            <p>创建一个新的任务定义</p>
+        </div>
+
+        <div class="card" style="max-width:600px;">
+            <form onsubmit="return createTask(event)">
+                <div class="form-group">
+                    <label>任务名称 *</label>
+                    <input type="text" id="task-name" required placeholder="如: build-kernel" pattern="[a-zA-Z0-9_-]+">
+                    <div style="font-size:0.8rem; color:var(--text-muted);">只允许字母、数字、下划线和连字符</div>
+                </div>
+
+                <div class="form-group">
+                    <label>类型</label>
+                    <select id="task-type">
+                        <option value="dir">文件夹任务 (dir) - 独立目录, 有自己的 Taskfile.yml</option>
+                        <option value="inline">行内任务 (inline) - 追加到根 Taskfile.yml</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>描述</label>
+                    <input type="text" id="task-desc" placeholder="简短描述任务用途">
+                </div>
+
+                <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1.5rem;">
+                    <a href="/tasks" class="btn">取消</a>
+                    <button type="submit" class="btn btn-primary">创建</button>
+                </div>
+            </form>
+        </div>
+    </main>
+
+    <script>
+        async function createTask(e) {
+            e.preventDefault();
+            var name = document.getElementById('task-name').value.trim();
+            var type = document.getElementById('task-type').value;
+            var desc = document.getElementById('task-desc').value.trim();
+
+            try {
+                var res = await fetch('/api/v1/tasks', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name: name, type: type, desc: desc})
+                });
+                var data = await res.json();
+                if (data.ok) {
+                    showToast('创建成功', 'success');
+                    setTimeout(function() {
+                        window.location = '/tasks/' + encodeURIComponent(name);
+                    }, 500);
+                } else {
+                    showToast('创建失败: ' + (data.error || '未知错误'), 'error');
+                }
+            } catch (err) {
+                showToast('请求失败: ' + err.message, 'error');
+            }
+            return false;
+        }
+    </script>
+</body>
+</html>

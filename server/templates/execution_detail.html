@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>执行详情 - EZ 管理平台</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="/static/js/socket.io.min.js"></script>
+    <script src="/static/js/common.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">EZ 管理平台</div>
+        <div class="nav-links">
+            <a href="/">总览</a>
+            <a href="/tasks">任务</a>
+            <a href="/plans">计划</a>
+            <a href="/executions" class="active">执行记录</a>
+            <a href="/nodes">节点</a>
+            <a href="/settings">设置</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="toast-container" id="toast-container"></div>
+
+        <div class="breadcrumb">
+            <a href="/executions">执行记录</a>
+            <span class="sep">/</span>
+            <span id="breadcrumb-id">{{ exec_id }}</span>
+        </div>
+
+        <div id="detail-container">
+            <div class="loading">加载中...</div>
+        </div>
+    </main>
+
+    <script>
+        var socket = io();
+        var execId = '{{ exec_id }}';
+        var execType = null; // 'task' or 'plan'
+        var pollTimer = null;
+
+        async function loadDetail() {
+            // Try as plan run first
+            try {
+                var res = await fetch('/api/v1/plans/runs/' + encodeURIComponent(execId));
+                if (res.ok) {
+                    var data = await res.json();
+                    if (data.id) {
+                        execType = 'plan';
+                        renderPlanRun(data);
+                        return;
+                    }
+                }
+            } catch (e) { /* not a plan run */ }
+
+            // Try as job
+            try {
+                var res2 = await fetch('/api/v1/jobs/' + encodeURIComponent(execId));
+                if (res2.ok) {
+                    var data2 = await res2.json();
+                    if (data2.id || data2.task) {
+                        execType = 'task';
+                        renderJobDetail(data2);
+                        return;
+                    }
+                }
+            } catch (e) { /* not a job */ }
+
+            document.getElementById('detail-container').innerHTML =
+                '<div class="card"><div class="empty">未找到执行记录: ' + escapeHtml(execId) + '</div></div>';
+        }
+
+        // ============================
+        // Plan Run Detail
+        // ============================
+        function renderPlanRun(run) {
+            var steps = run.steps || [];
+            var isRunning = run.status === 'running';
+
+            var durationStr = '-';
+            if (run.duration) {
+                durationStr = formatDurationSec(run.duration);
+            } else if (run.started_at && run.finished_at) {
+                durationStr = formatDuration(run.started_at, run.finished_at);
+            } else if (run.started_at && isRunning) {
+                durationStr = formatDurationMs(new Date() - new Date(run.started_at));
+            }
+
+            var html = '';
+
+            // Header
+            html += '<div class="page-header-row">' +
+                '<div class="page-header">' +
+                '<h1>' + escapeHtml(run.plan_name || '') + ' <span style="font-weight:400; font-size:0.9rem; color:var(--text-muted);">Run #' + escapeHtml(run.id || '') + '</span></h1>' +
+                '<p>' + statusBadgeHtml(run.status) + ' &nbsp; ' + escapeHtml(durationStr) +
+                (run.total_steps ? ' &nbsp; ' + (run.completed_steps || 0) + '/' + run.total_steps + ' 步骤' : '') +
+                '</p>' +
+                '</div>' +
+                '</div>';
+
+            // Metadata
+            html += '<div class="card" style="margin-bottom:1.2rem;">' +
+                '<div class="detail-grid">' +
+                '<div class="detail-field"><span class="detail-label">计划</span><a href="/plans/' + encodeURIComponent(run.plan_name || '') + '">' + escapeHtml(run.plan_name || '') + '</a></div>' +
+                '<div class="detail-field"><span class="detail-label">触发方式</span>' + escapeHtml(run.trigger_type || 'manual') + '</div>' +
+                '<div class="detail-field"><span class="detail-label">开始时间</span>' + escapeHtml(run.started_at || '-') + '</div>' +
+                '<div class="detail-field"><span class="detail-label">结束时间</span>' + escapeHtml(run.finished_at || '-') + '</div>' +
+                '</div></div>';
+
+            // Gantt chart
+            if (steps.length > 0) {
+                html += '<div class="card" style="margin-bottom:1.2rem;">' +
+                    '<h3 style="margin-bottom:0.8rem;">时间线</h3>' +
+                    renderGantt(steps, run) +
+                    '</div>';
+            }
+
+            // Step table
+            html += '<div class="card" style="padding:0; overflow:hidden;">' +
+                '<table class="table">' +
+                '<thead><tr>' +
+                '<th>步骤</th>' +
+                '<th>任务</th>' +
+                '<th style="width:80px;">状态</th>' +
+                '<th style="width:90px;">耗时</th>' +
+                '<th style="width:80px;">退出码</th>' +
+                '<th style="width:40px;"></th>' +
+                '</tr></thead><tbody>';
+
+            steps.forEach(function(step, idx) {
+                var stepDur = '-';
+                if (step.duration) stepDur = formatDurationSec(step.duration);
+                else if (step.started_at && step.finished_at) stepDur = formatDuration(step.started_at, step.finished_at);
+                else if (step.started_at && step.status === 'running') stepDur = formatDurationMs(new Date() - new Date(step.started_at));
+
+                html += '<tr class="step-row" onclick="toggleStepLogs(' + idx + ')">' +
+                    '<td><strong>' + escapeHtml(step.step_name) + '</strong></td>' +
+                    '<td><a href="/tasks/' + encodeURIComponent(step.task_name) + '" onclick="event.stopPropagation();">' + escapeHtml(step.task_name) + '</a></td>' +
+                    '<td>' + statusBadgeHtml(step.status) + '</td>' +
+                    '<td>' + escapeHtml(stepDur) + '</td>' +
+                    '<td>' + (step.exit_code !== null && step.exit_code !== undefined ? step.exit_code : '-') + '</td>' +
+                    '<td style="text-align:center;"><span class="step-toggle" id="toggle-' + idx + '">&#9660;</span></td>' +
+                    '</tr>';
+
+                // Collapsible logs row
+                html += '<tr class="step-logs-row" id="logs-row-' + idx + '" style="display:none;">' +
+                    '<td colspan="6">' +
+                    '<div class="step-logs" id="step-logs-' + idx + '">' +
+                    escapeHtml(step.logs || '(无日志)') +
+                    '</div>' +
+                    '</td></tr>';
+            });
+
+            html += '</tbody></table></div>';
+
+            document.getElementById('detail-container').innerHTML = html;
+
+            // Start polling if running
+            if (isRunning) {
+                if (!pollTimer) pollTimer = setInterval(loadDetail, 3000);
+            } else {
+                if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+            }
+        }
+
+        function renderGantt(steps, run) {
+            // Find time range
+            var times = [];
+            steps.forEach(function(s) {
+                if (s.started_at) times.push(new Date(s.started_at).getTime());
+                if (s.finished_at) times.push(new Date(s.finished_at).getTime());
+            });
+            if (run.started_at) times.push(new Date(run.started_at).getTime());
+            if (run.finished_at) times.push(new Date(run.finished_at).getTime());
+
+            if (times.length < 2) return '<div class="empty">尚无时间数据</div>';
+
+            var minT = Math.min.apply(null, times);
+            var maxT = Math.max.apply(null, times);
+            if (maxT === minT) maxT = minT + 1000;
+            var totalMs = maxT - minT;
+
+            // Time axis labels
+            var axisLabels = '';
+            for (var i = 0; i <= 4; i++) {
+                var t = Math.round(totalMs * i / 4 / 1000);
+                var label = t < 60 ? t + 's' : Math.floor(t / 60) + 'm' + (t % 60) + 's';
+                axisLabels += '<span style="flex:1; text-align:' + (i === 0 ? 'left' : (i === 4 ? 'right' : 'center')) + ';">' + label + '</span>';
+            }
+
+            var html = '<div class="gantt-container">';
+            html += '<div class="gantt-header">' + axisLabels + '</div>';
+
+            steps.forEach(function(s) {
+                var left = 0, width = 0;
+                if (s.started_at) {
+                    var startMs = new Date(s.started_at).getTime() - minT;
+                    var endMs = s.finished_at ? new Date(s.finished_at).getTime() - minT : (new Date().getTime() - minT);
+                    left = (startMs / totalMs * 100);
+                    width = Math.max(((endMs - startMs) / totalMs * 100), 0.5);
+                }
+
+                html += '<div class="gantt-row">' +
+                    '<div class="gantt-label">' + escapeHtml(s.step_name) + '</div>' +
+                    '<div class="gantt-track">' +
+                    '<div class="gantt-bar ' + escapeHtml(s.status) + '" style="left:' + left + '%; width:' + width + '%" title="' + escapeHtml(s.step_name) + ': ' + escapeHtml(s.status) + '"></div>' +
+                    '</div></div>';
+            });
+
+            html += '<div class="gantt-legend">' +
+                '<div class="gantt-legend-item"><div class="gantt-legend-color" style="background:var(--success);"></div>成功</div>' +
+                '<div class="gantt-legend-item"><div class="gantt-legend-color" style="background:var(--danger);"></div>失败</div>' +
+                '<div class="gantt-legend-item"><div class="gantt-legend-color" style="background:var(--primary);"></div>运行中</div>' +
+                '<div class="gantt-legend-item"><div class="gantt-legend-color" style="background:var(--border);"></div>待执行</div>' +
+                '<div class="gantt-legend-item"><div class="gantt-legend-color" style="background:var(--text-muted); opacity:0.4;"></div>已跳过</div>' +
+                '</div>';
+            html += '</div>';
+            return html;
+        }
+
+        function toggleStepLogs(idx) {
+            var row = document.getElementById('logs-row-' + idx);
+            var toggle = document.getElementById('toggle-' + idx);
+            if (row.style.display === 'none') {
+                row.style.display = '';
+                toggle.innerHTML = '&#9650;';
+            } else {
+                row.style.display = 'none';
+                toggle.innerHTML = '&#9660;';
+            }
+        }
+
+        // ============================
+        // Job (Single Task) Detail
+        // ============================
+        function renderJobDetail(job) {
+            var isRunning = job.status === 'running';
+            var durationStr = '-';
+            if (job.started_at && job.finished_at) {
+                durationStr = formatDuration(job.started_at, job.finished_at);
+            } else if (job.started_at && isRunning) {
+                durationStr = formatDurationMs(new Date() - new Date(job.started_at));
+            }
+
+            var html = '';
+
+            // Header
+            html += '<div class="page-header-row">' +
+                '<div class="page-header">' +
+                '<h1>' + escapeHtml(job.task || '') + ' <span style="font-weight:400; font-size:0.9rem; color:var(--text-muted);">Job #' + escapeHtml(job.id || '') + '</span></h1>' +
+                '<p>' + statusBadgeHtml(job.status) + ' &nbsp; ' + escapeHtml(durationStr) + '</p>' +
+                '</div>' +
+                (isRunning ? '<button class="btn btn-danger" onclick="cancelJob()">取消</button>' : '') +
+                '</div>';
+
+            // Metadata
+            html += '<div class="card" style="margin-bottom:1.2rem;">' +
+                '<div class="detail-grid">' +
+                '<div class="detail-field"><span class="detail-label">任务</span><a href="/tasks/' + encodeURIComponent(job.task || '') + '">' + escapeHtml(job.task || '') + '</a></div>' +
+                '<div class="detail-field"><span class="detail-label">节点</span>' + escapeHtml(job.node_id || '本地') + '</div>' +
+                '<div class="detail-field"><span class="detail-label">退出码</span>' + (job.exit_code !== null && job.exit_code !== undefined ? job.exit_code : '-') + '</div>' +
+                '<div class="detail-field"><span class="detail-label">创建时间</span>' + escapeHtml(job.created_at || '-') + '</div>' +
+                '<div class="detail-field"><span class="detail-label">开始时间</span>' + escapeHtml(job.started_at || '-') + '</div>' +
+                '<div class="detail-field"><span class="detail-label">结束时间</span>' + escapeHtml(job.finished_at || '-') + '</div>' +
+                '</div></div>';
+
+            // Logs
+            html += '<div class="card">' +
+                '<h3 style="margin-bottom:0.8rem;">日志输出</h3>' +
+                '<div class="details-box" id="job-logs" style="min-height:100px;">' +
+                escapeHtml(job.logs || '(无日志)') +
+                '</div></div>';
+
+            document.getElementById('detail-container').innerHTML = html;
+
+            // SSE streaming for running jobs
+            if (isRunning) {
+                startLogStream();
+            }
+        }
+
+        function startLogStream() {
+            var evtSource = new EventSource('/api/v1/jobs/' + encodeURIComponent(execId) + '/logs');
+            evtSource.onmessage = function(e) {
+                try {
+                    var data = JSON.parse(e.data);
+                    if (data.logs) {
+                        var logEl = document.getElementById('job-logs');
+                        if (logEl) {
+                            logEl.textContent += data.logs;
+                            logEl.scrollTop = logEl.scrollHeight;
+                        }
+                    }
+                    if (data.done) {
+                        evtSource.close();
+                        // Reload to show final state
+                        setTimeout(loadDetail, 500);
+                    }
+                } catch (err) { /* ignore */ }
+            };
+            evtSource.onerror = function() {
+                evtSource.close();
+            };
+        }
+
+        async function cancelJob() {
+            if (!confirm('确定取消此任务?')) return;
+            try {
+                var res = await fetch('/api/v1/jobs/' + encodeURIComponent(execId) + '/cancel', {method: 'POST'});
+                var data = await res.json();
+                if (data.status === 'cancelled') {
+                    showToast('已取消', 'success');
+                    loadDetail();
+                } else {
+                    showToast('取消失败: ' + (data.error || '未知'), 'error');
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e.message, 'error');
+            }
+        }
+
+        // WebSocket
+        socket.on('job_update', function(data) {
+            if (data && data.id === execId) loadDetail();
+        });
+        socket.on('plan_step_update', function(data) {
+            if (data && data.run_id === execId) loadDetail();
+        });
+
+        // Initial load
+        loadDetail();
+    </script>
+</body>
+</html>

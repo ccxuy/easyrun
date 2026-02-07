@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>设置 - EZ 管理平台</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="/static/js/chart.min.js"></script>
+    <script src="/static/js/common.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">EZ 管理平台</div>
+        <div class="nav-links">
+            <a href="/">总览</a>
+            <a href="/tasks">任务</a>
+            <a href="/plans">计划</a>
+            <a href="/executions">执行记录</a>
+            <a href="/nodes">节点</a>
+            <a href="/settings" class="active">设置</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="toast-container" id="toast-container"></div>
+
+        <div class="page-header">
+            <h1>设置与统计</h1>
+            <p>数据统计与系统配置</p>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('charts', this)">数据统计</button>
+            <button class="tab" onclick="switchTab('system', this)">系统信息</button>
+            <button class="tab" onclick="switchTab('cache', this)">缓存管理</button>
+        </div>
+
+        <!-- Tab: Charts -->
+        <div class="tab-content active" id="tab-charts">
+            <!-- Time range -->
+            <div class="time-range">
+                <button class="active" onclick="setRange(1, this)">24小时</button>
+                <button onclick="setRange(7, this)">7天</button>
+                <button onclick="setRange(30, this)">30天</button>
+            </div>
+
+            <!-- Stats cards -->
+            <div class="stat-grid" style="margin-bottom:1.5rem;">
+                <div class="stat-card primary">
+                    <div class="stat-value" id="s-total">-</div>
+                    <div class="stat-label">总执行</div>
+                </div>
+                <div class="stat-card success">
+                    <div class="stat-value" id="s-success">-</div>
+                    <div class="stat-label">成功</div>
+                </div>
+                <div class="stat-card danger">
+                    <div class="stat-value" id="s-failed">-</div>
+                    <div class="stat-label">失败</div>
+                </div>
+                <div class="stat-card warning">
+                    <div class="stat-value" id="s-rate">-</div>
+                    <div class="stat-label">成功率</div>
+                </div>
+            </div>
+
+            <!-- Charts grid -->
+            <div class="chart-grid">
+                <div class="chart-card">
+                    <h3>执行趋势</h3>
+                    <div class="chart-wrapper"><canvas id="chart-trend"></canvas></div>
+                </div>
+                <div class="chart-card">
+                    <h3>任务分布</h3>
+                    <div class="chart-wrapper"><canvas id="chart-dist"></canvas></div>
+                </div>
+                <div class="chart-card">
+                    <h3>耗时分析</h3>
+                    <div class="chart-wrapper"><canvas id="chart-duration"></canvas></div>
+                </div>
+                <div class="chart-card">
+                    <h3>任务成功率</h3>
+                    <div class="chart-wrapper"><canvas id="chart-success-rate"></canvas></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: System -->
+        <div class="tab-content" id="tab-system">
+            <div class="card">
+                <h3 style="margin-bottom:1rem;">系统信息</h3>
+                <div class="detail-grid">
+                    <div class="detail-field">
+                        <span class="detail-label">版本</span>
+                        <span>EZ Server v2.1</span>
+                    </div>
+                    <div class="detail-field">
+                        <span class="detail-label">服务器地址</span>
+                        <code id="server-url"></code>
+                    </div>
+                    <div class="detail-field">
+                        <span class="detail-label">数据库路径</span>
+                        <code>.ez-server/ez.db</code>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Cache -->
+        <div class="tab-content" id="tab-cache">
+            <div class="card">
+                <h3 style="margin-bottom:1rem;">缓存管理</h3>
+                <p style="color:var(--text-muted); margin-bottom:1rem;">清除任务树缓存, 强制重新解析所有 YAML 文件</p>
+                <button class="btn btn-primary" onclick="clearCache()">清除缓存</button>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        function switchTab(tabId, btn) {
+            document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+            document.querySelectorAll('.tab-content').forEach(function(t) { t.classList.remove('active'); });
+            btn.classList.add('active');
+            document.getElementById('tab-' + tabId).classList.add('active');
+        }
+
+        document.getElementById('server-url').textContent = window.location.origin;
+
+        async function clearCache() {
+            try {
+                var res = await fetch('/api/v1/cache/clear', {method: 'POST'});
+                var data = await res.json();
+                showToast('缓存已清除', 'success');
+            } catch (e) {
+                showToast('失败: ' + e.message, 'error');
+            }
+        }
+
+        // Charts logic (from charts.html)
+        var charts = {};
+        var statsData = null;
+        var currentRange = 30;
+
+        function setRange(days, btn) {
+            currentRange = days;
+            document.querySelectorAll('.time-range button').forEach(function(b) { b.classList.remove('active'); });
+            if (btn) btn.classList.add('active');
+            loadStats();
+        }
+
+        function filterByRange(data) {
+            if (!data) return data;
+            var cutoff = new Date();
+            cutoff.setDate(cutoff.getDate() - currentRange);
+            var cutoffStr = cutoff.toISOString().slice(0, 10);
+
+            var filtered = Object.assign({}, data);
+            if (filtered.timeline) {
+                filtered.timeline = filtered.timeline.filter(function(d) { return d.date >= cutoffStr; });
+            }
+
+            if (filtered.raw_jobs) {
+                var jobs = filtered.raw_jobs.filter(function(j) {
+                    return (j.created_at || '').slice(0, 10) >= cutoffStr;
+                });
+                var total = jobs.length, success = 0, failed = 0;
+                var taskMap = {};
+                jobs.forEach(function(j) {
+                    if (j.status === 'success') success++;
+                    if (j.status === 'failed' || j.status === 'error') failed++;
+                    var t = j.task || 'unknown';
+                    if (!taskMap[t]) taskMap[t] = {task: t, total: 0, success: 0, failed: 0, durations: []};
+                    taskMap[t].total++;
+                    if (j.status === 'success') taskMap[t].success++;
+                    if (j.status === 'failed' || j.status === 'error') taskMap[t].failed++;
+                    if (j.started_at && j.finished_at) {
+                        var dur = (new Date(j.finished_at) - new Date(j.started_at)) / 1000;
+                        if (dur >= 0) taskMap[t].durations.push(dur);
+                    }
+                });
+                filtered.summary = {
+                    total_jobs: total, success: success, failed: failed,
+                    success_rate: total > 0 ? Math.round(success / total * 1000) / 10 : 0
+                };
+                filtered.by_task = Object.values(taskMap);
+            }
+            return filtered;
+        }
+
+        async function loadStats() {
+            try {
+                var res = await fetch('/api/v1/stats');
+                statsData = await res.json();
+                var data = filterByRange(statsData);
+                updateSummary(data);
+                renderCharts(data);
+            } catch (e) { console.error('加载统计失败:', e); }
+        }
+
+        function updateSummary(data) {
+            if (!data || !data.summary) return;
+            var s = data.summary;
+            document.getElementById('s-total').textContent = s.total_jobs;
+            document.getElementById('s-success').textContent = s.success;
+            document.getElementById('s-failed').textContent = s.failed;
+            document.getElementById('s-rate').textContent = s.success_rate + '%';
+        }
+
+        function createOrUpdate(canvasId, config) {
+            if (charts[canvasId]) charts[canvasId].destroy();
+            var ctx = document.getElementById(canvasId).getContext('2d');
+            charts[canvasId] = new Chart(ctx, config);
+        }
+
+        function renderCharts(data) {
+            if (!data) return;
+            renderTrendChart(data);
+            renderDistChart(data);
+            renderDurationChart(data);
+            renderSuccessRateChart(data);
+        }
+
+        function renderTrendChart(data) {
+            var timeline = data.timeline || [];
+            if (!timeline.length) timeline = [{date: new Date().toISOString().slice(0, 10), total: 0, success: 0, failed: 0}];
+            var ctx = document.getElementById('chart-trend').getContext('2d');
+            var g1 = ctx.createLinearGradient(0, 0, 0, 260);
+            g1.addColorStop(0, 'rgba(22,119,255,0.3)'); g1.addColorStop(1, 'rgba(22,119,255,0.02)');
+            var g2 = ctx.createLinearGradient(0, 0, 0, 260);
+            g2.addColorStop(0, 'rgba(82,196,26,0.25)'); g2.addColorStop(1, 'rgba(82,196,26,0.02)');
+            createOrUpdate('chart-trend', {
+                type: 'line',
+                data: {
+                    labels: timeline.map(function(d) { return d.date; }),
+                    datasets: [
+                        {label:'总执行', data: timeline.map(function(d){return d.total;}), borderColor:'#1677ff', backgroundColor:g1, fill:true, tension:0.4, borderWidth:2, pointRadius:3},
+                        {label:'成功', data: timeline.map(function(d){return d.success;}), borderColor:'#52c41a', backgroundColor:g2, fill:true, tension:0.4, borderWidth:2, pointRadius:3},
+                        {label:'失败', data: timeline.map(function(d){return d.failed;}), borderColor:'#ff4d4f', backgroundColor:'rgba(255,77,79,0.08)', fill:true, tension:0.4, borderWidth:2, pointRadius:3}
+                    ]
+                },
+                options: {responsive:true, maintainAspectRatio:false, plugins:{legend:{labels:{usePointStyle:true,padding:16,font:{size:12}}}}, scales:{x:{grid:{color:'rgba(0,0,0,0.04)'}},y:{beginAtZero:true,grid:{color:'rgba(0,0,0,0.04)'}}}}
+            });
+        }
+
+        function renderDistChart(data) {
+            var tasks = data.by_task || [];
+            if (!tasks.length) tasks = [{task:'暂无数据', total:1}];
+            var palette = ['#1677ff','#52c41a','#faad14','#ff4d4f','#722ed1','#13c2c2','#eb2f96','#fa8c16','#2f54eb','#a0d911'];
+            createOrUpdate('chart-dist', {
+                type: 'doughnut',
+                data: { labels: tasks.map(function(t){return t.task;}), datasets: [{data: tasks.map(function(t){return t.total;}), backgroundColor: tasks.map(function(_,i){return palette[i%palette.length];}), borderWidth:2, borderColor:'#fff'}] },
+                options: {responsive:true, maintainAspectRatio:false, cutout:'55%', plugins:{legend:{position:'right',labels:{usePointStyle:true,padding:12,font:{size:11}}}}}
+            });
+        }
+
+        function renderDurationChart(data) {
+            var tasks = (data.by_task || []).filter(function(t){return t.durations && t.durations.length > 0;});
+            var ctx = document.getElementById('chart-duration').getContext('2d');
+            if (!tasks.length && data.duration) {
+                var g = ctx.createLinearGradient(0,260,0,0); g.addColorStop(0,'rgba(22,119,255,0.2)'); g.addColorStop(1,'rgba(22,119,255,0.8)');
+                createOrUpdate('chart-duration', {type:'bar', data:{labels:['平均','最小','最大','P50','P90'], datasets:[{label:'耗时(秒)', data:[data.duration.avg,data.duration.min,data.duration.max,data.duration.p50,data.duration.p90], backgroundColor:g, borderRadius:4}]}, options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true}}}});
+                return;
+            }
+            var labels = [], avgDurs = [];
+            tasks.forEach(function(t) { labels.push(t.task); var s = t.durations.reduce(function(a,b){return a+b;},0); avgDurs.push(Math.round(s/t.durations.length*10)/10); });
+            var g = ctx.createLinearGradient(0,260,0,0); g.addColorStop(0,'rgba(114,46,209,0.15)'); g.addColorStop(0.5,'rgba(22,119,255,0.5)'); g.addColorStop(1,'rgba(19,194,194,0.85)');
+            createOrUpdate('chart-duration', {type:'bar', data:{labels:labels, datasets:[{label:'平均耗时(秒)', data:avgDurs, backgroundColor:g, borderRadius:6}]}, options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{x:{grid:{display:false}}, y:{beginAtZero:true}}}});
+        }
+
+        function renderSuccessRateChart(data) {
+            var tasks = (data.by_task || []).filter(function(t){return t.total > 0;});
+            if (!tasks.length) tasks = [{task:'暂无数据', total:1, success:0}];
+            var labels = tasks.map(function(t){return t.task;});
+            var rates = tasks.map(function(t){return t.total > 0 ? Math.round(t.success/t.total*1000)/10 : 0;});
+            var colors = rates.map(function(r){return r>=90?'rgba(82,196,26,0.75)':(r>=70?'rgba(250,173,20,0.75)':'rgba(255,77,79,0.75)');});
+            createOrUpdate('chart-success-rate', {type:'bar', data:{labels:labels, datasets:[{label:'成功率(%)', data:rates, backgroundColor:colors, borderRadius:6}]}, options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{x:{grid:{display:false}},y:{beginAtZero:true, max:100}}}});
+        }
+
+        loadStats();
+        setInterval(loadStats, 30000);
+    </script>
+
+    <style>
+        .chart-wrapper { position: relative; height: 280px; }
+        .chart-wrapper canvas { max-height: 280px; }
+    </style>
+</body>
+</html>

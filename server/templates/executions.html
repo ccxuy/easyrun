@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>执行记录 - EZ 管理平台</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="/static/js/socket.io.min.js"></script>
+    <script src="/static/js/common.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">EZ 管理平台</div>
+        <div class="nav-links">
+            <a href="/">总览</a>
+            <a href="/tasks">任务</a>
+            <a href="/plans">计划</a>
+            <a href="/executions" class="active">执行记录</a>
+            <a href="/nodes">节点</a>
+            <a href="/settings">设置</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="toast-container" id="toast-container"></div>
+
+        <div class="page-header-row">
+            <div class="page-header">
+                <h1>执行记录</h1>
+                <p>查看所有任务和计划的执行历史</p>
+            </div>
+            <button class="btn btn-primary" onclick="openRunModal()">执行任务</button>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs" id="type-tabs">
+            <button class="tab active" data-type="all" onclick="switchTab(this)">全部</button>
+            <button class="tab" data-type="plan" onclick="switchTab(this)">计划运行</button>
+            <button class="tab" data-type="task" onclick="switchTab(this)">单任务</button>
+            <button class="tab" data-type="cli" onclick="switchTab(this)">CLI 上报</button>
+        </div>
+
+        <!-- Filter bar -->
+        <div class="filter-bar">
+            <select id="status-filter" onchange="loadExecutions()">
+                <option value="">全部状态</option>
+                <option value="success">成功</option>
+                <option value="failed">失败</option>
+                <option value="running">运行中</option>
+                <option value="pending">等待中</option>
+            </select>
+            <input type="text" id="search-input" placeholder="搜索任务名..." oninput="debounceSearch()">
+        </div>
+
+        <!-- Table -->
+        <div class="card" style="padding:0; overflow:hidden;">
+            <table class="table" id="exec-table">
+                <thead>
+                    <tr>
+                        <th style="width:80px;">ID</th>
+                        <th style="width:70px;">类型</th>
+                        <th>名称</th>
+                        <th style="width:80px;">状态</th>
+                        <th style="width:90px;">耗时</th>
+                        <th style="width:100px;">时间</th>
+                    </tr>
+                </thead>
+                <tbody id="exec-body">
+                    <tr><td colspan="6" class="loading">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </main>
+
+    <!-- Run Task Modal -->
+    <div class="modal-overlay" id="run-modal" style="display:none;" onclick="closeRunModalBg(event)">
+        <div class="modal">
+            <button class="modal-close" onclick="closeRunModal()">&times;</button>
+            <h3>执行任务</h3>
+            <div class="form-group">
+                <label>选择任务</label>
+                <select id="modal-task"></select>
+            </div>
+            <div id="modal-params"></div>
+            <div class="form-group">
+                <label>执行节点</label>
+                <select id="modal-node">
+                    <option value="">本地执行</option>
+                </select>
+            </div>
+            <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem;">
+                <button class="btn" onclick="closeRunModal()">取消</button>
+                <button class="btn btn-primary" onclick="submitRun()">执行</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        var socket = io();
+        var currentType = 'all';
+        var searchTimer = null;
+
+        function switchTab(el) {
+            document.querySelectorAll('#type-tabs .tab').forEach(function(t) { t.classList.remove('active'); });
+            el.classList.add('active');
+            currentType = el.dataset.type;
+            loadExecutions();
+        }
+
+        function debounceSearch() {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(loadExecutions, 300);
+        }
+
+        async function loadExecutions() {
+            var status = document.getElementById('status-filter').value;
+            var search = document.getElementById('search-input').value;
+            var params = new URLSearchParams({type: currentType, limit: '50'});
+            if (status) params.set('status', status);
+            if (search) params.set('search', search);
+
+            try {
+                var res = await fetch('/api/v1/executions?' + params.toString());
+                var data = await res.json();
+                renderTable(data.executions || []);
+            } catch (e) {
+                document.getElementById('exec-body').innerHTML =
+                    '<tr><td colspan="6" class="empty">加载失败: ' + escapeHtml(e.message) + '</td></tr>';
+            }
+        }
+
+        function renderTable(execs) {
+            var tbody = document.getElementById('exec-body');
+            if (!execs.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无执行记录</td></tr>';
+                return;
+            }
+
+            var html = '';
+            execs.forEach(function(ex) {
+                var duration = '-';
+                if (ex.duration) {
+                    duration = formatDurationSec(ex.duration);
+                } else if (ex.started_at && ex.finished_at) {
+                    duration = formatDuration(ex.started_at, ex.finished_at);
+                } else if (ex.started_at && ex.status === 'running') {
+                    duration = formatDurationMs(new Date() - new Date(ex.started_at));
+                }
+
+                var time = formatTimeAgo(ex.created_at || ex.started_at);
+                var shortId = (ex.id || '').substring(0, 8);
+
+                html += '<tr onclick="viewExecution(\'' + escapeHtml(ex.id) + '\', \'' + escapeHtml(ex.type) + '\')">' +
+                    '<td><code style="font-size:0.8rem;">' + escapeHtml(shortId) + '</code></td>' +
+                    '<td>' + execTypeBadgeHtml(ex.type) + '</td>' +
+                    '<td>' + escapeHtml(ex.name || '-') + '</td>' +
+                    '<td>' + statusBadgeHtml(ex.status) + '</td>' +
+                    '<td>' + escapeHtml(duration) + '</td>' +
+                    '<td style="font-size:0.82rem; color:var(--text-muted);">' + escapeHtml(time) + '</td>' +
+                    '</tr>';
+            });
+            tbody.innerHTML = html;
+        }
+
+        function viewExecution(id, type) {
+            if (type === 'cli') {
+                // CLI executions don't have detail pages
+                showToast('CLI 上报记录无详情页', 'info');
+                return;
+            }
+            window.location.href = '/executions/' + encodeURIComponent(id);
+        }
+
+        // Run Task Modal
+        async function openRunModal() {
+            // Load tasks
+            try {
+                var res = await fetch('/api/v1/tasks/tree');
+                var data = await res.json();
+                var select = document.getElementById('modal-task');
+                select.innerHTML = '';
+                var tasks = data.tasks || [];
+                tasks.forEach(function(t) {
+                    if (t.type === 'namespace') return;
+                    var opt = document.createElement('option');
+                    opt.value = t.name;
+                    opt.textContent = t.name + (t.desc ? ' - ' + t.desc : '');
+                    select.appendChild(opt);
+                    // Children
+                    if (t.children) {
+                        t.children.forEach(function(c) {
+                            var copt = document.createElement('option');
+                            copt.value = c.name;
+                            copt.textContent = '  ' + c.name + (c.desc ? ' - ' + c.desc : '');
+                            select.appendChild(copt);
+                        });
+                    }
+                });
+                select.onchange = function() { loadParams(select.value); };
+                if (tasks.length > 0) loadParams(tasks[0].name);
+            } catch (e) {
+                showToast('加载任务失败: ' + e.message, 'error');
+            }
+
+            // Load nodes
+            try {
+                var nres = await fetch('/api/v1/nodes');
+                var ndata = await nres.json();
+                var nsel = document.getElementById('modal-node');
+                nsel.innerHTML = '<option value="">本地执行</option>';
+                (ndata.nodes || []).forEach(function(n) {
+                    if (n.status === 'online') {
+                        var opt = document.createElement('option');
+                        opt.value = n.id;
+                        opt.textContent = n.name + ' (' + n.id + ')';
+                        nsel.appendChild(opt);
+                    }
+                });
+            } catch (e) { /* ignore */ }
+
+            document.getElementById('run-modal').style.display = 'flex';
+        }
+
+        async function loadParams(taskName) {
+            var container = document.getElementById('modal-params');
+            container.innerHTML = '';
+            try {
+                var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName) + '/params');
+                var data = await res.json();
+                var params = data.params || [];
+                params.forEach(function(p) {
+                    var div = document.createElement('div');
+                    div.className = 'form-group';
+                    var label = document.createElement('label');
+                    label.textContent = p.name + (p.desc ? ' (' + p.desc + ')' : '');
+                    div.appendChild(label);
+
+                    if (p.type === 'select' && p.options) {
+                        var sel = document.createElement('select');
+                        sel.dataset.param = p.name;
+                        sel.className = 'modal-param';
+                        p.options.forEach(function(o) {
+                            var opt = document.createElement('option');
+                            opt.value = o;
+                            opt.textContent = o;
+                            if (o === p.default) opt.selected = true;
+                            sel.appendChild(opt);
+                        });
+                        div.appendChild(sel);
+                    } else {
+                        var input = document.createElement('input');
+                        input.type = 'text';
+                        input.dataset.param = p.name;
+                        input.className = 'modal-param';
+                        if (p.default) input.value = p.default;
+                        if (p.placeholder) input.placeholder = p.placeholder;
+                        div.appendChild(input);
+                    }
+                    container.appendChild(div);
+                });
+            } catch (e) { /* no params */ }
+        }
+
+        async function submitRun() {
+            var task = document.getElementById('modal-task').value;
+            var node = document.getElementById('modal-node').value;
+            var vars = {};
+            document.querySelectorAll('.modal-param').forEach(function(el) {
+                if (el.value) vars[el.dataset.param] = el.value;
+            });
+
+            try {
+                var res = await fetch('/api/v1/tasks/run', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({task: task, node: node || undefined, vars: vars})
+                });
+                var data = await res.json();
+                if (data.job_id) {
+                    closeRunModal();
+                    showToast('任务已提交: ' + data.job_id, 'success');
+                    // Navigate to execution detail
+                    window.location.href = '/executions/' + data.job_id;
+                } else {
+                    showToast('提交失败: ' + (data.error || '未知错误'), 'error');
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e.message, 'error');
+            }
+        }
+
+        function closeRunModal() {
+            document.getElementById('run-modal').style.display = 'none';
+        }
+
+        function closeRunModalBg(e) {
+            if (e.target === e.currentTarget) closeRunModal();
+        }
+
+        // Check URL params for auto-run
+        (function() {
+            var params = new URLSearchParams(window.location.search);
+            if (params.get('run')) {
+                // Auto-open modal for the specified task
+                setTimeout(function() {
+                    openRunModal().then(function() {
+                        var sel = document.getElementById('modal-task');
+                        sel.value = params.get('run');
+                        if (sel.value) loadParams(sel.value);
+                    });
+                }, 300);
+            }
+        })();
+
+        // WebSocket real-time
+        socket.on('job_update', function() { loadExecutions(); });
+        socket.on('plan_update', function() { loadExecutions(); });
+        socket.on('plan_step_update', function() { loadExecutions(); });
+
+        // Initial load
+        loadExecutions();
+
+        // Auto-refresh
+        setInterval(loadExecutions, 10000);
+    </script>
+</body>
+</html>

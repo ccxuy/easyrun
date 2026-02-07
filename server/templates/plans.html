@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>计划 - EZ 管理平台</title>
     <link rel="stylesheet" href="/static/css/style.css">
-    <script src="/static/js/socket.io.min.js"></script>
+    <script src="/static/js/common.js"></script>
 </head>
 <body>
     <nav class="navbar">
@@ -14,566 +14,170 @@
             <a href="/">总览</a>
             <a href="/tasks">任务</a>
             <a href="/plans" class="active">计划</a>
-            <a href="/jobs">执行记录</a>
+            <a href="/executions">执行记录</a>
             <a href="/nodes">节点</a>
-            <a href="/charts">统计</a>
+            <a href="/settings">设置</a>
         </div>
     </nav>
 
     <main class="container">
         <div class="toast-container" id="toast-container"></div>
-        <div class="page-header">
-            <h1>计划编排</h1>
-            <p>DAG 依赖计划管理与可视化执行</p>
+
+        <div class="page-header-row">
+            <div class="page-header">
+                <h1>工作流计划</h1>
+                <p>编排和执行多步骤工作流</p>
+            </div>
+            <button class="btn btn-primary" onclick="openCreateModal()">+ 新建计划</button>
         </div>
 
-        <div class="dag-container">
-            <!-- 左侧边栏 -->
-            <div class="dag-sidebar">
-                <div class="card" style="margin-bottom:1rem;">
-                    <h2>计划列表</h2>
-                    <div id="plan-list" class="plan-list">
-                        <div class="loading">加载中...</div>
-                    </div>
-                </div>
-                <div class="card">
-                    <h2>最近执行</h2>
-                    <div id="plan-runs" class="run-history">
-                        <div class="empty">暂无执行记录</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 右侧主区域 -->
-            <div class="dag-main">
-                <div class="card">
-                    <div id="dag-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
-                        <h2 id="dag-title" style="margin-bottom:0;">选择一个计划</h2>
-                        <div style="display:flex; gap:0.5rem;">
-                            <button id="btn-yaml-plan" class="btn btn-secondary btn-sm" style="display:none;" onclick="togglePlanYaml()">YAML</button>
-                            <button id="btn-run-plan" class="btn btn-primary" style="display:none;" onclick="runPlan()">执行计划</button>
-                        </div>
-                    </div>
-
-                    <!-- DAG 可视化画布 -->
-                    <div id="dag-canvas" class="dag-canvas">
-                        <div class="empty">从左侧选择一个计划查看 DAG 流程图</div>
-                    </div>
-
-                    <!-- YAML 面板 -->
-                    <div id="plan-yaml-panel" style="display:none; margin-top:1rem; border-top:1px solid var(--border); padding-top:0.8rem;">
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
-                            <h4 style="margin:0; font-size:0.95rem;">Plan YAML</h4>
-                            <span id="plan-yaml-path" style="font-size:0.8rem; color:var(--text-muted);"></span>
-                        </div>
-                        <textarea id="plan-yaml-editor" style="width:100%; min-height:250px; font-family:monospace; font-size:0.85rem; padding:0.6rem; border:1px solid var(--border); border-radius:6px; background:var(--bg-color,#f0f2f5); box-sizing:border-box; resize:vertical; tab-size:2;"></textarea>
-                        <div style="display:flex; gap:0.5rem; margin-top:0.5rem;">
-                            <button class="btn btn-sm btn-primary" onclick="savePlanYaml()">保存</button>
-                            <span id="plan-yaml-msg" style="font-size:0.8rem; color:var(--text-muted); line-height:2;"></span>
-                        </div>
-                    </div>
-
-                    <!-- 节点详情面板 -->
-                    <div id="dag-detail" class="dag-detail" style="display:none;">
-                        <h3 id="detail-title">步骤详情</h3>
-                        <div id="detail-body"></div>
-                    </div>
-                </div>
-            </div>
+        <div id="plans-container">
+            <div class="loading">加载中...</div>
         </div>
     </main>
 
+    <!-- Create Plan Modal -->
+    <div class="modal-overlay" id="create-modal" style="display:none;" onclick="closeModalBg(event)">
+        <div class="modal">
+            <button class="modal-close" onclick="closeModal()">&times;</button>
+            <h3>新建计划</h3>
+            <div class="form-group">
+                <label>计划名称 *</label>
+                <input type="text" id="new-plan-name" placeholder="如: build-pipeline" pattern="[a-zA-Z0-9_-]+">
+                <div style="font-size:0.8rem; color:var(--text-muted);">只允许字母、数字、下划线和连字符</div>
+            </div>
+            <div class="form-group">
+                <label>描述</label>
+                <input type="text" id="new-plan-desc" placeholder="简短描述计划用途">
+            </div>
+            <div style="display:flex; gap:0.5rem; justify-content:flex-end; margin-top:1rem;">
+                <button class="btn" onclick="closeModal()">取消</button>
+                <button class="btn btn-primary" onclick="createPlan()">创建</button>
+            </div>
+        </div>
+    </div>
+
     <script>
-        var socket = io();
-        var currentPlan = null;
-        var planSteps = [];
-        var planYamlContent = '';
-
-        window.showToast = function(msg, type, duration) {
-            type = type || 'info';
-            duration = duration || 3000;
-            var container = document.getElementById('toast-container');
-            var toast = document.createElement('div');
-            toast.className = 'toast toast-' + type;
-            toast.textContent = msg;
-            container.appendChild(toast);
-            setTimeout(function() {
-                toast.style.animation = 'toast-out 0.3s ease-in forwards';
-                setTimeout(function() { toast.remove(); }, 300);
-            }, duration);
-        };
-
-        var statusLabels = {
-            pending: '等待中', running: '运行中', success: '成功',
-            failed: '失败', error: '错误', skipped: '已跳过'
-        };
-
-        function escapeHtml(str) {
-            var div = document.createElement('div');
-            div.textContent = str || '';
-            return div.innerHTML;
-        }
-
         async function loadPlans() {
             try {
                 var res = await fetch('/api/v1/plans');
                 var data = await res.json();
-                var container = document.getElementById('plan-list');
+                var plans = data.plans || [];
 
-                if (!data.plans || data.plans.length === 0) {
-                    container.innerHTML = '<div class="empty">暂无计划</div>';
+                if (plans.length === 0) {
+                    document.getElementById('plans-container').innerHTML =
+                        '<div class="card"><div class="empty-state" style="text-align:center; padding:3rem;">' +
+                        '<div style="font-size:3rem; margin-bottom:1rem; opacity:0.3;">&#128203;</div>' +
+                        '<h3 style="margin-bottom:0.5rem;">暂无计划</h3>' +
+                        '<p style="color:var(--text-muted); margin-bottom:1rem;">创建一个工作流计划来编排多步骤任务</p>' +
+                        '<button class="btn btn-primary" onclick="openCreateModal()">+ 新建计划</button>' +
+                        '</div></div>';
                     return;
                 }
 
-                container.innerHTML = data.plans.map(function(plan) {
-                    var activeClass = (currentPlan && currentPlan === plan.name) ? ' active' : '';
-                    return '<div class="plan-item' + activeClass + '" onclick="selectPlan(\'' + escapeHtml(plan.name) + '\')">' +
-                        '<div>' +
-                        '<div class="plan-name">' + escapeHtml(plan.name) + '</div>' +
-                        '<div class="plan-meta">' + escapeHtml(plan.desc || plan.file) + '</div>' +
+                var html = '<div class="plan-card-grid">';
+                plans.forEach(function(plan) {
+                    var lastRunHtml = '';
+                    if (plan.last_run) {
+                        lastRunHtml = '最近: ' + formatTimeAgo(plan.last_run.finished_at) + ' ' + statusBadgeHtml(plan.last_run.status);
+                    } else {
+                        lastRunHtml = '<span style="color:var(--text-muted);">尚未执行</span>';
+                    }
+
+                    html += '<div class="plan-card" onclick="window.location=\'/plans/' + encodeURIComponent(plan.name) + '\'">' +
+                        '<div class="plan-card-name">' + escapeHtml(plan.name) + '</div>' +
+                        '<div class="plan-card-desc">' + escapeHtml(plan.desc || '无描述') + '</div>' +
+                        '<div class="plan-card-meta">' +
+                        '<span>' + (plan.step_count || 0) + ' 步骤</span>' +
+                        '<span>' + lastRunHtml + '</span>' +
                         '</div>' +
-                        '</div>';
-                }).join('');
-            } catch (e) {
-                document.getElementById('plan-list').innerHTML =
-                    '<div class="empty">加载失败</div>';
-            }
-        }
-
-        async function loadPlanRuns() {
-            try {
-                var res = await fetch('/api/v1/plans/runs');
-                var data = await res.json();
-                var container = document.getElementById('plan-runs');
-
-                if (!data.runs || data.runs.length === 0) {
-                    container.innerHTML = '<div class="empty">暂无执行记录</div>';
-                    return;
-                }
-
-                container.innerHTML = data.runs.slice(0, 15).map(function(run) {
-                    var statusClass = run.status || 'pending';
-                    var timeStr = run.created_at ? new Date(run.created_at).toLocaleString('zh-CN') : '-';
-                    return '<div class="run-item ' + escapeHtml(statusClass) + '" ' +
-                        'onclick="showRunDetail(\'' + escapeHtml(run.id) + '\')" style="cursor:pointer;">' +
-                        '<div>' +
-                        '<strong>' + escapeHtml(run.plan_name) + '</strong>' +
-                        '<div style="font-size:0.75rem;color:var(--text-muted);">' + timeStr + '</div>' +
-                        '</div>' +
-                        '<span class="status-badge ' + escapeHtml(statusClass) + '">' +
-                        (statusLabels[statusClass] || statusClass) + '</span>' +
-                        '</div>';
-                }).join('');
-            } catch (e) {
-                document.getElementById('plan-runs').innerHTML =
-                    '<div class="empty">加载失败</div>';
-            }
-        }
-
-        async function selectPlan(planName) {
-            currentPlan = planName;
-            document.getElementById('dag-title').textContent = planName;
-            document.getElementById('btn-run-plan').style.display = 'inline-block';
-            document.getElementById('btn-yaml-plan').style.display = 'inline-block';
-            document.getElementById('dag-detail').style.display = 'none';
-            document.getElementById('plan-yaml-panel').style.display = 'none';
-
-            // 更新列表高亮
-            document.querySelectorAll('.plan-item').forEach(function(el) {
-                el.classList.remove('active');
-                if (el.querySelector('.plan-name').textContent === planName) {
-                    el.classList.add('active');
-                }
-            });
-
-            // 加载计划详情
-            var canvas = document.getElementById('dag-canvas');
-            canvas.innerHTML = '<div class="loading">加载中...</div>';
-
-            try {
-                var res = await fetch('/api/v1/plans/' + encodeURIComponent(planName));
-                var data = await res.json();
-
-                if (data.error) {
-                    canvas.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(data.error) + '</div>';
-                    return;
-                }
-
-                // 更新标题 (含描述)
-                var titleHtml = escapeHtml(data.name || planName);
-                if (data.desc) {
-                    document.getElementById('dag-title').innerHTML = titleHtml +
-                        '<span style="font-size:0.85rem; font-weight:normal; color:var(--text-muted); margin-left:0.8rem;">' +
-                        escapeHtml(data.desc) + '</span>';
-                }
-
-                // 保存 YAML 内容
-                planYamlContent = data.yaml || '';
-
-                // 渲染 DAG
-                planSteps = data.steps || [];
-                renderDAG(planSteps);
-            } catch (e) {
-                canvas.innerHTML = '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
-            }
-        }
-
-        function renderDAG(steps) {
-            var canvas = document.getElementById('dag-canvas');
-            if (!steps || steps.length === 0) {
-                canvas.innerHTML = '<div class="empty">此计划没有步骤定义</div>';
-                return;
-            }
-
-            // 计算层级 (拓扑排序)
-            var nameToStep = {};
-            steps.forEach(function(s) { nameToStep[s.name] = s; });
-
-            var levels = {};
-            function getLevel(name) {
-                if (levels[name] !== undefined) return levels[name];
-                var step = nameToStep[name];
-                if (!step || !step.needs || step.needs.length === 0) {
-                    levels[name] = 0;
-                    return 0;
-                }
-                var maxParent = 0;
-                step.needs.forEach(function(dep) {
-                    maxParent = Math.max(maxParent, getLevel(dep) + 1);
-                });
-                levels[name] = maxParent;
-                return maxParent;
-            }
-            steps.forEach(function(s) { getLevel(s.name); });
-
-            // 按层级分组
-            var maxLevel = 0;
-            var levelGroups = {};
-            steps.forEach(function(s) {
-                var lvl = levels[s.name] || 0;
-                if (lvl > maxLevel) maxLevel = lvl;
-                if (!levelGroups[lvl]) levelGroups[lvl] = [];
-                levelGroups[lvl].push(s);
-            });
-
-            // 渲染
-            var html = '<div class="dag-levels">';
-            for (var lvl = 0; lvl <= maxLevel; lvl++) {
-                var group = levelGroups[lvl] || [];
-                if (lvl > 0) {
-                    html += '<div class="dag-arrow-row">';
-                    for (var a = 0; a < group.length; a++) {
-                        html += '<div class="dag-arrow-down"></div>';
-                    }
-                    html += '</div>';
-                }
-                html += '<div class="dag-level">';
-                group.forEach(function(step) {
-                    var needsStr = (step.needs && step.needs.length > 0) ? step.needs.join(', ') : '';
-                    var varsKeys = step.vars ? Object.keys(step.vars) : [];
-                    html += '<div class="dag-node-card" onclick="showStepDetail(\'' + escapeHtml(step.name) + '\')">';
-                    html += '<div class="dag-node-name">' + escapeHtml(step.name) + '</div>';
-                    html += '<div class="dag-node-task"><a href="/tasks?select=' + encodeURIComponent(step.task) + '" onclick="event.stopPropagation();" style="color:var(--primary);text-decoration:underline;">' + escapeHtml(step.task) + '</a></div>';
-                    if (needsStr) {
-                        html += '<div class="dag-node-needs">depends: ' + escapeHtml(needsStr) + '</div>';
-                    }
-                    if (varsKeys.length > 0) {
-                        html += '<div class="dag-node-vars">' + varsKeys.length + ' vars</div>';
-                    }
-                    html += '</div>';
+                        '<div class="plan-card-actions" onclick="event.stopPropagation();">' +
+                        '<a href="/plans/' + encodeURIComponent(plan.name) + '" class="btn btn-sm">打开</a>' +
+                        '<button class="btn btn-sm btn-primary" onclick="runPlan(\'' + escapeHtml(plan.name) + '\')">执行</button>' +
+                        '<button class="btn btn-sm btn-danger" onclick="deletePlan(\'' + escapeHtml(plan.name) + '\')">删除</button>' +
+                        '</div></div>';
                 });
                 html += '</div>';
-            }
-            html += '</div>';
-
-            canvas.innerHTML = html;
-        }
-
-        function showStepDetail(stepName) {
-            var step = null;
-            for (var i = 0; i < planSteps.length; i++) {
-                if (planSteps[i].name === stepName) { step = planSteps[i]; break; }
-            }
-            if (!step) return;
-
-            var detail = document.getElementById('dag-detail');
-            detail.style.display = 'block';
-            document.getElementById('detail-title').textContent = step.name;
-
-            var html = '<div class="detail-row">' +
-                '<span class="detail-label">任务</span>' +
-                '<span><a href="/tasks?select=' + encodeURIComponent(step.task) + '" style="color:var(--primary);text-decoration:underline;">' +
-                escapeHtml(step.task) + '</a></span>' +
-                '</div>';
-
-            if (step.needs && step.needs.length > 0) {
-                html += '<div class="detail-row">' +
-                    '<span class="detail-label">依赖</span>' +
-                    '<span>' + step.needs.map(function(n) { return escapeHtml(n); }).join(', ') + '</span>' +
-                    '</div>';
-            }
-
-            if (step.vars && Object.keys(step.vars).length > 0) {
-                html += '<div class="detail-row"><span class="detail-label">变量</span><span></span></div>';
-                html += '<div class="step-vars-list">';
-                Object.keys(step.vars).forEach(function(k) {
-                    html += '<div class="step-var-item"><code>' + escapeHtml(k) + '</code> = <code>' + escapeHtml(String(step.vars[k])) + '</code></div>';
-                });
-                html += '</div>';
-            }
-
-            if (step.artifacts && step.artifacts.length > 0) {
-                html += '<div class="detail-row">' +
-                    '<span class="detail-label">产物</span>' +
-                    '<span>' + step.artifacts.map(function(a) { return '<code>' + escapeHtml(a) + '</code>'; }).join(', ') + '</span>' +
-                    '</div>';
-            }
-
-            if (step.inputs && step.inputs.length > 0) {
-                html += '<div class="detail-row">' +
-                    '<span class="detail-label">输入</span>' +
-                    '<span>' + step.inputs.map(function(a) { return '<code>' + escapeHtml(a) + '</code>'; }).join(', ') + '</span>' +
-                    '</div>';
-            }
-
-            document.getElementById('detail-body').innerHTML = html;
-        }
-
-        async function togglePlanYaml() {
-            var panel = document.getElementById('plan-yaml-panel');
-            if (panel.style.display !== 'none') {
-                panel.style.display = 'none';
-                return;
-            }
-            panel.style.display = 'block';
-            var editor = document.getElementById('plan-yaml-editor');
-            var pathEl = document.getElementById('plan-yaml-path');
-
-            if (planYamlContent) {
-                editor.value = planYamlContent;
-                pathEl.textContent = 'plans/' + currentPlan + '.yml';
-            } else {
-                // 从 API 加载
-                try {
-                    var res = await fetch('/api/v1/plans/' + encodeURIComponent(currentPlan) + '/yaml');
-                    var data = await res.json();
-                    editor.value = data.yaml || '';
-                    pathEl.textContent = data.file || '';
-                    planYamlContent = data.yaml || '';
-                } catch (e) {
-                    editor.value = '# 加载失败: ' + e.message;
-                }
-            }
-        }
-
-        async function savePlanYaml() {
-            if (!currentPlan) return;
-            var editor = document.getElementById('plan-yaml-editor');
-            var msgEl = document.getElementById('plan-yaml-msg');
-            msgEl.textContent = '保存中...';
-            msgEl.style.color = 'var(--text-muted)';
-
-            try {
-                var res = await fetch('/api/v1/plans/' + encodeURIComponent(currentPlan) + '/yaml', {
-                    method: 'PUT',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({yaml: editor.value})
-                });
-                var data = await res.json();
-                if (data.ok) {
-                    msgEl.textContent = '已保存';
-                    msgEl.style.color = 'var(--success, #52c41a)';
-                    planYamlContent = editor.value;
-                    // 重新加载 DAG
-                    selectPlan(currentPlan);
-                } else {
-                    msgEl.textContent = data.error || '保存失败';
-                    msgEl.style.color = 'var(--danger, #ff4d4f)';
-                }
+                document.getElementById('plans-container').innerHTML = html;
             } catch (e) {
-                msgEl.textContent = '保存失败: ' + e.message;
-                msgEl.style.color = 'var(--danger, #ff4d4f)';
+                document.getElementById('plans-container').innerHTML =
+                    '<div class="card"><div class="empty">加载失败: ' + escapeHtml(e.message) + '</div></div>';
             }
         }
 
-        async function showRunDetail(runId) {
+        async function runPlan(name) {
+            if (!confirm('执行计划 "' + name + '"?')) return;
             try {
-                var res = await fetch('/api/v1/plans/runs/' + encodeURIComponent(runId));
-                var run = await res.json();
-
-                var detail = document.getElementById('dag-detail');
-                detail.style.display = 'block';
-                document.getElementById('detail-title').textContent = '执行记录: ' + run.plan_name;
-
-                var html = '<div class="detail-row">' +
-                    '<span class="detail-label">运行 ID</span>' +
-                    '<span><code>' + escapeHtml(run.id) + '</code></span>' +
-                    '</div>' +
-                    '<div class="detail-row">' +
-                    '<span class="detail-label">状态</span>' +
-                    '<span class="status-badge ' + escapeHtml(run.status) + '">' +
-                    (statusLabels[run.status] || run.status) + '</span>' +
-                    '</div>' +
-                    '<div class="detail-row">' +
-                    '<span class="detail-label">开始时间</span>' +
-                    '<span>' + (run.started_at ? new Date(run.started_at).toLocaleString('zh-CN') : '-') + '</span>' +
-                    '</div>' +
-                    '<div class="detail-row">' +
-                    '<span class="detail-label">结束时间</span>' +
-                    '<span>' + (run.finished_at ? new Date(run.finished_at).toLocaleString('zh-CN') : '-') + '</span>' +
-                    '</div>';
-
-                if (run.steps_json) {
-                    try {
-                        var stepsData = JSON.parse(run.steps_json);
-                        if (stepsData.stdout || stepsData.stderr) {
-                            html += '<div class="log-preview">' +
-                                escapeHtml((stepsData.stdout || '') + '\n' + (stepsData.stderr || '')) +
-                                '</div>';
-                        }
-                    } catch (e) { }
-                }
-
-                document.getElementById('detail-body').innerHTML = html;
-            } catch (e) {
-                console.error('加载执行记录失败:', e);
-            }
-        }
-
-        async function runPlan() {
-            if (!currentPlan) return;
-            if (!confirm('确定执行计划: ' + currentPlan + '?')) return;
-
-            try {
-                var res = await fetch('/api/v1/plans/' + encodeURIComponent(currentPlan) + '/run', {
+                var res = await fetch('/api/v1/plans/' + encodeURIComponent(name) + '/run', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({vars: {}})
+                    body: JSON.stringify({})
                 });
                 var data = await res.json();
                 if (data.run_id) {
-                    showToast('计划已提交: ' + data.run_id, 'success');
-                    loadPlanRuns();
+                    showToast('计划已启动: ' + data.run_id, 'success');
+                    window.location.href = '/executions/' + data.run_id;
                 } else {
-                    showToast('提交失败: ' + (data.error || '未知错误'), 'error');
+                    showToast('启动失败: ' + (data.error || '未知'), 'error');
                 }
             } catch (e) {
                 showToast('请求失败: ' + e.message, 'error');
             }
         }
 
-        // WebSocket 实时更新
-        socket.on('plan_update', function(data) {
-            loadPlanRuns();
-        });
+        async function deletePlan(name) {
+            if (!confirm('确定删除计划 "' + name + '"?')) return;
+            try {
+                var res = await fetch('/api/v1/plans/' + encodeURIComponent(name), {method: 'DELETE'});
+                var data = await res.json();
+                if (data.ok) {
+                    showToast('已删除', 'success');
+                    loadPlans();
+                } else {
+                    showToast('删除失败: ' + (data.error || '未知'), 'error');
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e.message, 'error');
+            }
+        }
 
-        // 初始加载
+        function openCreateModal() {
+            document.getElementById('create-modal').style.display = 'flex';
+        }
+
+        function closeModal() {
+            document.getElementById('create-modal').style.display = 'none';
+        }
+
+        function closeModalBg(e) {
+            if (e.target === e.currentTarget) closeModal();
+        }
+
+        async function createPlan() {
+            var name = document.getElementById('new-plan-name').value.trim();
+            var desc = document.getElementById('new-plan-desc').value.trim();
+            if (!name) { showToast('名称不能为空', 'error'); return; }
+
+            try {
+                var res = await fetch('/api/v1/plans', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name: name, desc: desc})
+                });
+                var data = await res.json();
+                if (data.ok) {
+                    closeModal();
+                    showToast('创建成功', 'success');
+                    window.location.href = '/plans/' + encodeURIComponent(name);
+                } else {
+                    showToast('创建失败: ' + (data.error || '未知'), 'error');
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e.message, 'error');
+            }
+        }
+
         loadPlans();
-        loadPlanRuns();
     </script>
-
-    <style>
-        .dag-levels {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 0;
-            padding: 1rem 0;
-        }
-
-        .dag-level {
-            display: flex;
-            gap: 1.2rem;
-            justify-content: center;
-            flex-wrap: wrap;
-        }
-
-        .dag-arrow-row {
-            display: flex;
-            gap: 1.2rem;
-            justify-content: center;
-            padding: 0.3rem 0;
-        }
-
-        .dag-arrow-down {
-            width: 2px;
-            height: 24px;
-            background: var(--border);
-            position: relative;
-            margin: 0 auto;
-        }
-
-        .dag-arrow-down::after {
-            content: '';
-            position: absolute;
-            bottom: 0;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 0;
-            height: 0;
-            border-left: 5px solid transparent;
-            border-right: 5px solid transparent;
-            border-top: 6px solid var(--border);
-        }
-
-        .dag-node-card {
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 0.8rem 1rem;
-            min-width: 160px;
-            max-width: 220px;
-            cursor: pointer;
-            background: var(--card-bg, #fff);
-            transition: border-color 0.2s, box-shadow 0.2s;
-        }
-
-        .dag-node-card:hover {
-            border-color: var(--primary);
-            box-shadow: 0 2px 8px rgba(22,119,255,0.15);
-        }
-
-        .dag-node-name {
-            font-weight: 600;
-            font-size: 0.95rem;
-            margin-bottom: 0.3rem;
-        }
-
-        .dag-node-task {
-            font-size: 0.82rem;
-            color: var(--primary);
-            font-family: monospace;
-            margin-bottom: 0.2rem;
-        }
-
-        .dag-node-needs {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-        }
-
-        .dag-node-vars {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            margin-top: 0.1rem;
-        }
-
-        .step-vars-list {
-            background: var(--bg-color, #f0f2f5);
-            border-radius: 6px;
-            padding: 0.5rem 0.8rem;
-            margin-top: 0.3rem;
-        }
-
-        .step-var-item {
-            font-size: 0.82rem;
-            padding: 0.15rem 0;
-        }
-
-        .step-var-item code {
-            background: var(--card-bg, #fff);
-            padding: 0.1rem 0.3rem;
-            border-radius: 3px;
-            font-size: 0.8rem;
-        }
-    </style>
 </body>
 </html>

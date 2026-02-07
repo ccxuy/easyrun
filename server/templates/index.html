@@ -6,6 +6,7 @@
     <title>EZ 管理平台</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <script src="/static/js/socket.io.min.js"></script>
+    <script src="/static/js/common.js"></script>
 </head>
 <body>
     <nav class="navbar">
@@ -14,269 +15,225 @@
             <a href="/" class="active">总览</a>
             <a href="/tasks">任务</a>
             <a href="/plans">计划</a>
-            <a href="/jobs">执行记录</a>
+            <a href="/executions">执行记录</a>
             <a href="/nodes">节点</a>
-            <a href="/charts">统计</a>
+            <a href="/settings">设置</a>
         </div>
     </nav>
 
     <main class="container">
         <div class="toast-container" id="toast-container"></div>
-        <!-- 统计卡片 -->
-        <div class="stat-grid">
-            <div class="stat-card primary">
-                <div class="stat-value" id="stat-total">-</div>
-                <div class="stat-label">总执行</div>
+
+        <div class="page-header">
+            <h1>运营概览</h1>
+            <p>24 小时执行统计与系统状态</p>
+        </div>
+
+        <!-- Stat Strip -->
+        <div class="stat-grid" style="margin-bottom:1.5rem;">
+            <div class="card stat-card" id="stat-active">
+                <div class="stat-value">-</div>
+                <div class="stat-label">活跃运行</div>
             </div>
-            <div class="stat-card success">
-                <div class="stat-value" id="stat-success">-</div>
-                <div class="stat-label">成功</div>
+            <div class="card stat-card" id="stat-rate">
+                <div class="stat-value">-</div>
+                <div class="stat-label">成功率 (24h)</div>
             </div>
-            <div class="stat-card danger">
-                <div class="stat-value" id="stat-failed">-</div>
-                <div class="stat-label">失败</div>
+            <div class="card stat-card" id="stat-failed">
+                <div class="stat-value">-</div>
+                <div class="stat-label">失败 (24h)</div>
             </div>
-            <div class="stat-card warning">
-                <div class="stat-value" id="stat-rate">-</div>
-                <div class="stat-label">成功率</div>
+            <div class="card stat-card" id="stat-nodes">
+                <div class="stat-value">-</div>
+                <div class="stat-label">在线节点</div>
             </div>
         </div>
 
-        <div class="dashboard" style="margin-top:1.2rem;">
-            <!-- 节点状态 -->
-            <div class="card">
-                <h2>节点状态</h2>
-                <div id="node-grid" class="node-grid">
-                    <div class="loading">加载中...</div>
+        <!-- Main grid -->
+        <div class="dashboard-grid">
+            <!-- Left: Attention + Quick actions -->
+            <div>
+                <!-- Attention items -->
+                <div class="card" style="margin-bottom:1.2rem;">
+                    <h3 style="margin-bottom:0.8rem;">需关注事项</h3>
+                    <ul class="attention-list" id="attention-list">
+                        <li class="attention-item" style="color:var(--text-muted);">加载中...</li>
+                    </ul>
+
+                    <div class="quick-actions">
+                        <a href="/executions?run=" class="btn btn-sm btn-primary">执行任务</a>
+                        <a href="/plans" class="btn btn-sm">执行计划</a>
+                        <a href="/tasks/new" class="btn btn-sm">+ 新任务</a>
+                    </div>
+                </div>
+
+                <!-- Recent executions -->
+                <div class="card" style="padding:0; overflow:hidden;">
+                    <div style="padding:1rem 1.2rem 0.5rem;">
+                        <h3>最近执行</h3>
+                    </div>
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th style="width:60px;">类型</th>
+                                <th>名称</th>
+                                <th style="width:70px;">状态</th>
+                                <th style="width:80px;">耗时</th>
+                                <th style="width:80px;">时间</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recent-body">
+                            <tr><td colspan="5" class="loading">加载中...</td></tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
-            <!-- 活跃任务 -->
-            <div class="card">
-                <h2>活跃任务</h2>
-                <div id="active-jobs" class="job-list">
-                    <div class="empty">暂无活跃任务</div>
+            <!-- Right: Activity feed -->
+            <div>
+                <div class="card">
+                    <h3 style="margin-bottom:0.8rem;">活动流</h3>
+                    <div class="activity-feed" id="activity-feed">
+                        <div style="color:var(--text-muted); font-size:0.88rem;">等待活动...</div>
+                    </div>
                 </div>
-            </div>
-
-            <!-- 快速执行 -->
-            <div class="card">
-                <h2>快速执行</h2>
-                <form id="quick-run-form" class="quick-run">
-                    <select id="task-select" required>
-                        <option value="">选择任务...</option>
-                    </select>
-                    <select id="node-select">
-                        <option value="">本地执行</option>
-                    </select>
-                    <button type="submit" class="btn btn-primary">执行</button>
-                </form>
-            </div>
-
-            <!-- 最近执行 -->
-            <div class="card full-width">
-                <h2>最近执行</h2>
-                <table id="recent-jobs" class="table">
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>任务</th>
-                            <th>节点</th>
-                            <th>状态</th>
-                            <th>耗时</th>
-                            <th>操作</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr><td colspan="6" class="empty">暂无执行记录</td></tr>
-                    </tbody>
-                </table>
             </div>
         </div>
     </main>
 
     <script>
         var socket = io();
+        var activityItems = [];
 
-        window.showToast = function(msg, type, duration) {
-            type = type || 'info';
-            duration = duration || 3000;
-            var container = document.getElementById('toast-container');
-            var toast = document.createElement('div');
-            toast.className = 'toast toast-' + type;
-            toast.textContent = msg;
-            container.appendChild(toast);
-            setTimeout(function() {
-                toast.style.animation = 'toast-out 0.3s ease-in forwards';
-                setTimeout(function() { toast.remove(); }, 300);
-            }, duration);
-        };
-
-        var statusLabels = {
-            success: '成功', failed: '失败', error: '错误',
-            running: '运行中', pending: '等待中', cancelled: '已取消', timeout: '超时'
-        };
-
-        function formatDuration(started, finished) {
-            if (!started || !finished) return '-';
-            var ms = new Date(finished) - new Date(started);
-            var s = Math.round(ms / 1000);
-            if (s < 60) return s + '秒';
-            if (s < 3600) return Math.floor(s / 60) + '分' + (s % 60) + '秒';
-            return Math.floor(s / 3600) + '时' + Math.floor((s % 3600) / 60) + '分';
-        }
-
-        function escapeHtml(str) {
-            var div = document.createElement('div');
-            div.textContent = str;
-            return div.innerHTML;
-        }
-
-        async function loadStats() {
+        async function loadDashboard() {
             try {
-                var res = await fetch('/api/v1/stats');
+                var res = await fetch('/api/v1/dashboard');
                 var data = await res.json();
-                var s = data.summary;
-                document.getElementById('stat-total').textContent = s.total_jobs;
-                document.getElementById('stat-success').textContent = s.success;
-                document.getElementById('stat-failed').textContent = s.failed;
-                document.getElementById('stat-rate').textContent = s.success_rate + '%';
-            } catch (e) {
-                console.error('加载统计失败:', e);
-            }
-        }
 
-        async function loadNodes() {
-            try {
-                var res = await fetch('/api/v1/nodes');
-                var data = await res.json();
-                var container = document.getElementById('node-grid');
-                var nodeSelect = document.getElementById('node-select');
+                // Stats
+                var stats = data.stats_24h || {};
+                var nodesSummary = data.nodes_summary || {};
 
-                if (data.nodes.length === 0) {
-                    container.innerHTML = '<div class="empty">暂无节点</div>';
-                } else {
-                    container.innerHTML = data.nodes.map(function(node) {
-                        var tagsHtml = node.tags && node.tags.length
-                            ? '<div class="node-tags">' + node.tags.join(', ') + '</div>' : '';
-                        return '<div class="node-card ' + escapeHtml(node.status) + '">' +
-                            '<div class="node-name">' + escapeHtml(node.name) + '</div>' +
-                            '<div class="node-status">' + escapeHtml(node.status) + '</div>' +
-                            tagsHtml + '</div>';
-                    }).join('');
+                document.querySelector('#stat-active .stat-value').textContent = (data.active_runs || []).length;
+                document.querySelector('#stat-rate .stat-value').textContent = (stats.success_rate || 0) + '%';
+                document.querySelector('#stat-failed .stat-value').textContent = stats.failed || 0;
+                document.querySelector('#stat-nodes .stat-value').textContent =
+                    (nodesSummary.online || 0) + '/' + (nodesSummary.total || 0);
+
+                // Color coding
+                var failedEl = document.querySelector('#stat-failed .stat-value');
+                if (stats.failed > 0) failedEl.style.color = 'var(--danger)';
+                else failedEl.style.color = '';
+
+                // Attention
+                var attHtml = '';
+                var activeRuns = data.active_runs || [];
+                var failed24h = data.failed_24h || [];
+
+                if (activeRuns.length === 0 && failed24h.length === 0) {
+                    attHtml = '<li class="attention-item" style="color:var(--text-muted);">一切正常</li>';
                 }
 
-                nodeSelect.innerHTML = '<option value="">本地执行</option>' +
-                    data.nodes.map(function(n) {
-                        return '<option value="' + escapeHtml(n.id) + '">' + escapeHtml(n.name) + '</option>';
-                    }).join('');
-            } catch (e) {
-                console.error('加载节点失败:', e);
-            }
-        }
-
-        async function loadTasks() {
-            try {
-                var res = await fetch('/api/v1/tasks');
-                var data = await res.json();
-                var select = document.getElementById('task-select');
-                select.innerHTML = '<option value="">选择任务...</option>' +
-                    data.tasks.map(function(t) {
-                        return '<option value="' + escapeHtml(t.name) + '">' + escapeHtml(t.name) + '</option>';
-                    }).join('');
-            } catch (e) {
-                console.error('加载任务失败:', e);
-            }
-        }
-
-        async function loadJobs() {
-            try {
-                var res = await fetch('/api/v1/jobs');
-                var data = await res.json();
-
-                // 活跃任务
-                var activeJobs = data.jobs.filter(function(j) {
-                    return j.status === 'pending' || j.status === 'running';
+                activeRuns.forEach(function(r) {
+                    var progress = '';
+                    if (r.total_steps) progress = ' (' + (r.completed_steps || 0) + '/' + r.total_steps + ')';
+                    attHtml += '<li class="attention-item">' +
+                        statusBadgeHtml(r.status) +
+                        ' <a href="/executions/' + encodeURIComponent(r.id) + '">' + escapeHtml(r.name || r.id) + '</a>' +
+                        escapeHtml(progress) +
+                        ' <span style="color:var(--text-muted); font-size:0.8rem;">' + escapeHtml(r.type) + '</span>' +
+                        '</li>';
                 });
-                var activeContainer = document.getElementById('active-jobs');
-                if (activeJobs.length === 0) {
-                    activeContainer.innerHTML = '<div class="empty">暂无活跃任务</div>';
-                } else {
-                    activeContainer.innerHTML = activeJobs.map(function(job) {
-                        return '<div class="job-item ' + escapeHtml(job.status) + '">' +
-                            '<div class="job-info">' +
-                            '<span class="job-task">' + escapeHtml(job.task) + '</span>' +
-                            '<span class="job-node">' + escapeHtml(job.node_id || '本地') + '</span>' +
-                            '</div>' +
-                            '<span class="status-badge ' + escapeHtml(job.status) + '">' +
-                            (statusLabels[job.status] || job.status) + '</span>' +
-                            '</div>';
-                    }).join('');
-                }
 
-                // 最近执行表格
-                var tbody = document.querySelector('#recent-jobs tbody');
-                if (data.jobs.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="6" class="empty">暂无执行记录</td></tr>';
-                } else {
-                    tbody.innerHTML = data.jobs.slice(0, 20).map(function(job) {
-                        var duration = formatDuration(job.started_at, job.finished_at);
-                        return '<tr>' +
-                            '<td><code>' + escapeHtml(job.id) + '</code></td>' +
-                            '<td>' + escapeHtml(job.task) + '</td>' +
-                            '<td>' + escapeHtml(job.node_id || '本地') + '</td>' +
-                            '<td><span class="status-badge ' + escapeHtml(job.status) + '">' +
-                            (statusLabels[job.status] || job.status) + '</span></td>' +
-                            '<td>' + duration + '</td>' +
-                            '<td><a href="/jobs?id=' + escapeHtml(job.id) + '">查看</a></td>' +
-                            '</tr>';
-                    }).join('');
-                }
+                failed24h.forEach(function(f) {
+                    attHtml += '<li class="attention-item">' +
+                        statusBadgeHtml(f.status) +
+                        ' <a href="/executions/' + encodeURIComponent(f.id) + '">' + escapeHtml(f.name || f.id) + '</a>' +
+                        ' <span style="font-size:0.8rem; color:var(--text-muted);">' + formatTimeAgo(f.finished_at) + '</span>' +
+                        '</li>';
+                });
+
+                document.getElementById('attention-list').innerHTML = attHtml;
             } catch (e) {
-                console.error('加载任务失败:', e);
+                document.getElementById('attention-list').innerHTML =
+                    '<li class="attention-item" style="color:var(--danger);">加载失败: ' + escapeHtml(e.message) + '</li>';
             }
         }
 
-        // 快速执行
-        document.getElementById('quick-run-form').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            var task = document.getElementById('task-select').value;
-            var node = document.getElementById('node-select').value;
-            if (!task) return;
-
+        async function loadRecent() {
             try {
-                var res = await fetch('/api/v1/tasks/run', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({task: task, node: node || null, vars: {}})
-                });
+                var res = await fetch('/api/v1/executions?limit=10');
                 var data = await res.json();
-                if (data.job_id) {
-                    showToast('任务已提交: ' + data.job_id, 'success');
-                    loadJobs();
-                    loadStats();
-                } else {
-                    showToast('提交失败: ' + (data.error || '未知错误'), 'error');
+                var execs = data.executions || [];
+
+                if (execs.length === 0) {
+                    document.getElementById('recent-body').innerHTML =
+                        '<tr><td colspan="5" class="empty">暂无执行记录</td></tr>';
+                    return;
                 }
-            } catch (err) {
-                showToast('请求失败: ' + err.message, 'error');
+
+                var html = '';
+                execs.forEach(function(ex) {
+                    var duration = '-';
+                    if (ex.duration) duration = formatDurationSec(ex.duration);
+                    else if (ex.started_at && ex.finished_at) duration = formatDuration(ex.started_at, ex.finished_at);
+
+                    html += '<tr onclick="window.location=\'/executions/' + encodeURIComponent(ex.id) + '\'" style="cursor:pointer;">' +
+                        '<td>' + execTypeBadgeHtml(ex.type) + '</td>' +
+                        '<td>' + escapeHtml(ex.name || '-') + '</td>' +
+                        '<td>' + statusBadgeHtml(ex.status) + '</td>' +
+                        '<td style="font-size:0.82rem;">' + escapeHtml(duration) + '</td>' +
+                        '<td style="font-size:0.82rem; color:var(--text-muted);">' + formatTimeAgo(ex.created_at) + '</td>' +
+                        '</tr>';
+                });
+                document.getElementById('recent-body').innerHTML = html;
+            } catch (e) {
+                document.getElementById('recent-body').innerHTML =
+                    '<tr><td colspan="5" class="empty">加载失败</td></tr>';
             }
+        }
+
+        // Activity feed (WebSocket events)
+        function addActivity(msg) {
+            activityItems.unshift({msg: msg, time: new Date().toISOString()});
+            if (activityItems.length > 20) activityItems.pop();
+            renderFeed();
+        }
+
+        function renderFeed() {
+            var html = '';
+            activityItems.forEach(function(item) {
+                html += '<div class="feed-item">' +
+                    escapeHtml(item.msg) +
+                    ' <span class="feed-time">' + formatTimeAgo(item.time) + '</span>' +
+                    '</div>';
+            });
+            if (!html) html = '<div style="color:var(--text-muted); font-size:0.88rem;">等待活动...</div>';
+            document.getElementById('activity-feed').innerHTML = html;
+        }
+
+        socket.on('job_update', function(data) {
+            if (data) addActivity((data.task || data.id) + ' - ' + (statusLabels[data.status] || data.status));
+            loadDashboard();
+            loadRecent();
+        });
+        socket.on('plan_update', function(data) {
+            if (data) addActivity('计划 ' + (data.plan_name || data.id) + ' - ' + (statusLabels[data.status] || data.status));
+            loadDashboard();
+            loadRecent();
+        });
+        socket.on('plan_step_update', function(data) {
+            if (data) addActivity(data.step_name + ' (' + data.plan_name + ') - ' + (statusLabels[data.status] || data.status));
+        });
+        socket.on('node_update', function(data) {
+            if (data) addActivity('节点 ' + (data.name || data.id) + ' - ' + (data.status || ''));
+            loadDashboard();
         });
 
-        // WebSocket 实时更新
-        socket.on('node_update', function() { loadNodes(); });
-        socket.on('job_update', function() { loadJobs(); loadStats(); });
-
-        // 初始加载
-        loadStats();
-        loadNodes();
-        loadTasks();
-        loadJobs();
-
-        // 定时刷新
-        setInterval(loadNodes, 10000);
-        setInterval(loadJobs, 5000);
-        setInterval(loadStats, 15000);
+        // Init
+        loadDashboard();
+        loadRecent();
+        setInterval(function() { loadDashboard(); loadRecent(); }, 15000);
     </script>
 </body>
 </html>

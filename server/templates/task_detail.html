@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>任务详情 - EZ 管理平台</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="/static/js/common.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">EZ 管理平台</div>
+        <div class="nav-links">
+            <a href="/">总览</a>
+            <a href="/tasks" class="active">任务</a>
+            <a href="/plans">计划</a>
+            <a href="/executions">执行记录</a>
+            <a href="/nodes">节点</a>
+            <a href="/settings">设置</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="toast-container" id="toast-container"></div>
+
+        <div class="breadcrumb">
+            <a href="/tasks">任务</a>
+            <span class="sep">/</span>
+            <span id="breadcrumb-name">{{ task_name }}</span>
+        </div>
+
+        <div class="page-header-row">
+            <div class="page-header">
+                <h1 id="task-title">{{ task_name }}</h1>
+                <p id="task-desc"></p>
+            </div>
+            <div style="display:flex; gap:0.5rem;">
+                <a href="/executions?run={{ task_name }}" class="btn btn-primary">执行此任务</a>
+                <button class="btn btn-danger" id="delete-btn" onclick="deleteTask()" style="display:none;">删除</button>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('definition', this)">定义</button>
+            <button class="tab" onclick="switchTab('files', this)" id="files-tab" style="display:none;">文件</button>
+            <button class="tab" onclick="switchTab('history', this)">历史</button>
+        </div>
+
+        <!-- Tab: Definition -->
+        <div class="tab-content active" id="tab-definition">
+            <div style="display:grid; grid-template-columns:3fr 2fr; gap:1.2rem;">
+                <!-- YAML Editor -->
+                <div class="card">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem;">
+                        <h3>YAML 定义</h3>
+                        <div style="display:flex; gap:0.5rem;">
+                            <button class="btn btn-sm" onclick="reloadYaml()">还原</button>
+                            <button class="btn btn-sm btn-primary" onclick="saveYaml()">保存</button>
+                        </div>
+                    </div>
+                    <textarea id="yaml-editor" class="details-box" style="width:100%; min-height:300px; resize:vertical; font-family:'SF Mono','Fira Code',monospace; font-size:0.85rem; border:1px solid var(--border); border-radius:6px; padding:0.8rem;"></textarea>
+                </div>
+
+                <!-- Metadata Panel -->
+                <div>
+                    <div class="card" style="margin-bottom:1.2rem;">
+                        <h3 style="margin-bottom:0.8rem;">元数据</h3>
+                        <div id="meta-content">
+                            <div class="loading">加载中...</div>
+                        </div>
+                    </div>
+
+                    <!-- Params -->
+                    <div class="card" id="params-card" style="display:none;">
+                        <h3 style="margin-bottom:0.8rem;">参数</h3>
+                        <div id="params-content"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: Files (only for dir tasks) -->
+        <div class="tab-content" id="tab-files">
+            <div class="card">
+                <div class="breadcrumb" id="file-breadcrumb">
+                    <a href="#" onclick="browseFiles(''); return false;">根目录</a>
+                </div>
+                <div id="file-browser"></div>
+                <div id="file-viewer" style="display:none;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin:0.8rem 0;">
+                        <strong id="file-viewer-name"></strong>
+                        <button class="btn btn-sm" onclick="closeFileViewer()">关闭</button>
+                    </div>
+                    <pre class="details-box" id="file-viewer-content"></pre>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: History -->
+        <div class="tab-content" id="tab-history">
+            <div class="card" style="padding:0; overflow:hidden;">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th style="width:80px;">ID</th>
+                            <th style="width:80px;">状态</th>
+                            <th style="width:90px;">耗时</th>
+                            <th>时间</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-body">
+                        <tr><td colspan="4" class="loading">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        var taskName = '{{ task_name }}';
+        var taskType = '';
+        var currentPath = '';
+
+        function switchTab(tabId, btn) {
+            document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+            document.querySelectorAll('.tab-content').forEach(function(t) { t.classList.remove('active'); });
+            btn.classList.add('active');
+            document.getElementById('tab-' + tabId).classList.add('active');
+
+            if (tabId === 'history') loadHistory();
+            if (tabId === 'files') browseFiles('');
+        }
+
+        // Load task detail
+        async function loadTask() {
+            try {
+                var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName));
+                var data = await res.json();
+
+                taskType = data.type || '';
+                document.getElementById('task-desc').textContent = data.desc || '';
+
+                // Metadata
+                var metaHtml = '<div class="detail-grid">' +
+                    '<div class="detail-field"><span class="detail-label">名称</span>' + escapeHtml(data.name || taskName) + '</div>' +
+                    '<div class="detail-field"><span class="detail-label">类型</span>' + escapeHtml(data.type || '') + '</div>';
+                if (data.desc) {
+                    metaHtml += '<div class="detail-field"><span class="detail-label">描述</span>' + escapeHtml(data.desc) + '</div>';
+                }
+                metaHtml += '</div>';
+                document.getElementById('meta-content').innerHTML = metaHtml;
+
+                // Show files tab for dir tasks
+                if (taskType === 'dir') {
+                    document.getElementById('files-tab').style.display = '';
+                }
+
+                // Show delete button (not for tool tasks)
+                if (taskType !== 'tool') {
+                    document.getElementById('delete-btn').style.display = '';
+                }
+            } catch (e) {
+                document.getElementById('meta-content').innerHTML =
+                    '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        // Load params
+        async function loadParams() {
+            try {
+                var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName) + '/params');
+                var data = await res.json();
+                var params = data.params || [];
+                if (params.length === 0) return;
+
+                document.getElementById('params-card').style.display = '';
+                var html = '';
+                params.forEach(function(p) {
+                    html += '<div style="padding:0.4rem 0; border-bottom:1px solid var(--border); font-size:0.88rem;">' +
+                        '<strong>' + escapeHtml(p.name) + '</strong>' +
+                        (p.type ? ' <span class="badge">' + escapeHtml(p.type) + '</span>' : '') +
+                        (p.desc ? '<div style="color:var(--text-muted); font-size:0.82rem;">' + escapeHtml(p.desc) + '</div>' : '') +
+                        (p.default ? '<div style="font-size:0.8rem;">默认: <code>' + escapeHtml(p.default) + '</code></div>' : '') +
+                        '</div>';
+                });
+                document.getElementById('params-content').innerHTML = html;
+            } catch (e) { /* no params */ }
+        }
+
+        // YAML editor
+        async function reloadYaml() {
+            try {
+                var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName) + '/yaml');
+                var data = await res.json();
+                document.getElementById('yaml-editor').value = data.content || data.yaml || '';
+            } catch (e) {
+                showToast('加载 YAML 失败: ' + e.message, 'error');
+            }
+        }
+
+        async function saveYaml() {
+            var content = document.getElementById('yaml-editor').value;
+            try {
+                var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName) + '/yaml', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({content: content})
+                });
+                var data = await res.json();
+                if (data.ok) {
+                    showToast('保存成功', 'success');
+                } else {
+                    showToast('保存失败: ' + (data.error || '未知错误'), 'error');
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e.message, 'error');
+            }
+        }
+
+        // File browser (dir tasks only)
+        async function browseFiles(path) {
+            currentPath = path;
+            try {
+                var url = '/api/v1/tasks/' + encodeURIComponent(taskName) + '/files';
+                if (path) url += '?path=' + encodeURIComponent(path);
+                var res = await fetch(url);
+                var data = await res.json();
+                var files = data.files || [];
+
+                // Breadcrumb
+                var bcHtml = '<a href="#" onclick="browseFiles(\'\'); return false;">根目录</a>';
+                if (path) {
+                    var parts = path.split('/');
+                    var acc = '';
+                    parts.forEach(function(p, i) {
+                        acc += (i > 0 ? '/' : '') + p;
+                        var accCopy = acc;
+                        bcHtml += ' <span class="sep">/</span> <a href="#" onclick="browseFiles(\'' + escapeHtml(accCopy) + '\'); return false;">' + escapeHtml(p) + '</a>';
+                    });
+                }
+                document.getElementById('file-breadcrumb').innerHTML = bcHtml;
+
+                // File list
+                var html = '';
+                if (path) {
+                    var parent = path.split('/').slice(0, -1).join('/');
+                    html += '<div class="file-browser-item" onclick="browseFiles(\'' + escapeHtml(parent) + '\')">' +
+                        '<span>&#128194; ..</span><span></span></div>';
+                }
+                files.forEach(function(f) {
+                    if (f.is_dir) {
+                        var fpath = path ? path + '/' + f.name : f.name;
+                        html += '<div class="file-browser-item" onclick="browseFiles(\'' + escapeHtml(fpath) + '\')">' +
+                            '<span>&#128194; ' + escapeHtml(f.name) + '</span>' +
+                            '<span class="file-size"></span></div>';
+                    } else {
+                        var fpath2 = path ? path + '/' + f.name : f.name;
+                        html += '<div class="file-browser-item" onclick="viewFile(\'' + escapeHtml(fpath2) + '\')">' +
+                            '<span>&#128196; ' + escapeHtml(f.name) + '</span>' +
+                            '<span class="file-size">' + escapeHtml(f.size || '') + '</span></div>';
+                    }
+                });
+
+                if (!html) html = '<div class="empty">空目录</div>';
+                document.getElementById('file-browser').innerHTML = html;
+                document.getElementById('file-viewer').style.display = 'none';
+            } catch (e) {
+                document.getElementById('file-browser').innerHTML =
+                    '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        async function viewFile(path) {
+            try {
+                var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName) + '/files/' + encodeURIComponent(path));
+                var data = await res.json();
+                document.getElementById('file-viewer-name').textContent = path;
+                document.getElementById('file-viewer-content').textContent = data.content || '';
+                document.getElementById('file-viewer').style.display = '';
+            } catch (e) {
+                showToast('打开文件失败: ' + e.message, 'error');
+            }
+        }
+
+        function closeFileViewer() {
+            document.getElementById('file-viewer').style.display = 'none';
+        }
+
+        // History
+        async function loadHistory() {
+            try {
+                var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName) + '/history');
+                var data = await res.json();
+                var records = data.history || [];
+
+                if (records.length === 0) {
+                    document.getElementById('history-body').innerHTML =
+                        '<tr><td colspan="4" class="empty">暂无执行记录</td></tr>';
+                    return;
+                }
+
+                var html = '';
+                records.forEach(function(r) {
+                    var duration = '-';
+                    if (r.duration) duration = formatDurationSec(r.duration);
+                    else if (r.started_at && r.finished_at) duration = formatDuration(r.started_at, r.finished_at);
+
+                    html += '<tr onclick="window.location=\'/executions/' + encodeURIComponent(r.id) + '\'" style="cursor:pointer;">' +
+                        '<td><code style="font-size:0.8rem;">' + escapeHtml((r.id || '').substring(0, 8)) + '</code></td>' +
+                        '<td>' + statusBadgeHtml(r.status) + '</td>' +
+                        '<td>' + escapeHtml(duration) + '</td>' +
+                        '<td style="font-size:0.82rem; color:var(--text-muted);">' + formatTimeAgo(r.created_at || r.started_at) + '</td>' +
+                        '</tr>';
+                });
+                document.getElementById('history-body').innerHTML = html;
+            } catch (e) {
+                document.getElementById('history-body').innerHTML =
+                    '<tr><td colspan="4" class="empty">加载失败: ' + escapeHtml(e.message) + '</td></tr>';
+            }
+        }
+
+        // Delete task
+        async function deleteTask() {
+            if (!confirm('确定删除任务 "' + taskName + '"?')) return;
+            try {
+                var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName), {method: 'DELETE'});
+                var data = await res.json();
+                if (data.ok) {
+                    showToast('已删除', 'success');
+                    setTimeout(function() { window.location = '/tasks'; }, 500);
+                } else {
+                    showToast('删除失败: ' + (data.error || '未知'), 'error');
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e.message, 'error');
+            }
+        }
+
+        // Init
+        loadTask();
+        loadParams();
+        reloadYaml();
+    </script>
+
+    <style>
+        @media (max-width: 768px) {
+            #tab-definition > div {
+                grid-template-columns: 1fr !important;
+            }
+        }
+    </style>
+</body>
+</html>

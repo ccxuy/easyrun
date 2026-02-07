@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>计划详情 - EZ 管理平台</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="/static/js/common.js"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">EZ 管理平台</div>
+        <div class="nav-links">
+            <a href="/">总览</a>
+            <a href="/tasks">任务</a>
+            <a href="/plans" class="active">计划</a>
+            <a href="/executions">执行记录</a>
+            <a href="/nodes">节点</a>
+            <a href="/settings">设置</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="toast-container" id="toast-container"></div>
+
+        <div class="breadcrumb">
+            <a href="/plans">计划</a>
+            <span class="sep">/</span>
+            <span>{{ plan_name }}</span>
+        </div>
+
+        <div class="page-header-row">
+            <div class="page-header">
+                <h1 id="plan-title">{{ plan_name }}</h1>
+                <p id="plan-desc"></p>
+            </div>
+            <div style="display:flex; gap:0.5rem;">
+                <button class="btn btn-primary" onclick="runPlan()">立即执行</button>
+                <button class="btn btn-danger" onclick="deletePlan()">删除</button>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('dag', this)">DAG</button>
+            <button class="tab" onclick="switchTab('yaml', this)">YAML 编辑</button>
+            <button class="tab" onclick="switchTab('config', this)">运行配置</button>
+            <button class="tab" onclick="switchTab('history', this)">执行历史</button>
+        </div>
+
+        <!-- Tab: DAG -->
+        <div class="tab-content active" id="tab-dag">
+            <div class="card">
+                <div class="dag-canvas" id="dag-canvas">
+                    <div class="loading">加载中...</div>
+                </div>
+            </div>
+            <!-- Step detail panel -->
+            <div class="card" id="step-detail" style="margin-top:1rem; display:none;">
+                <h3 id="step-detail-title"></h3>
+                <div id="step-detail-content"></div>
+            </div>
+        </div>
+
+        <!-- Tab: YAML Editor -->
+        <div class="tab-content" id="tab-yaml">
+            <div class="card">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem;">
+                    <h3>计划 YAML</h3>
+                    <div style="display:flex; gap:0.5rem;">
+                        <button class="btn btn-sm" onclick="reloadYaml()">还原</button>
+                        <button class="btn btn-sm btn-primary" onclick="saveYaml()">保存</button>
+                    </div>
+                </div>
+                <textarea id="yaml-editor" style="width:100%; min-height:400px; resize:vertical; font-family:'SF Mono','Fira Code',monospace; font-size:0.85rem; border:1px solid var(--border); border-radius:6px; padding:0.8rem; background:var(--bg-color);"></textarea>
+            </div>
+        </div>
+
+        <!-- Tab: Config -->
+        <div class="tab-content" id="tab-config">
+            <div class="card">
+                <h3 style="margin-bottom:1rem;">运行配置</h3>
+                <div class="detail-grid">
+                    <div class="detail-field">
+                        <span class="detail-label">Webhook URL</span>
+                        <div style="display:flex; gap:0.5rem; align-items:center;">
+                            <code id="webhook-url" style="font-size:0.82rem; background:var(--bg-color); padding:0.3rem 0.5rem; border-radius:4px; flex:1; overflow:hidden; text-overflow:ellipsis;"></code>
+                            <button class="btn btn-sm" onclick="copyWebhook()">复制</button>
+                        </div>
+                    </div>
+                    <div class="detail-field">
+                        <span class="detail-label">Cron 调度</span>
+                        <span style="color:var(--text-muted);">即将支持</span>
+                    </div>
+                </div>
+
+                <h4 style="margin-top:1.5rem; margin-bottom:0.8rem;">全局变量</h4>
+                <div id="global-vars">
+                    <div style="color:var(--text-muted); font-size:0.88rem;">在此处设置的变量将覆盖各步骤中定义的同名变量</div>
+                </div>
+                <div style="margin-top:0.8rem;">
+                    <div style="display:flex; gap:0.5rem;" id="var-add-row">
+                        <input type="text" id="var-key" placeholder="变量名" style="flex:1; padding:0.4rem 0.6rem; border:1px solid var(--border); border-radius:4px; font-size:0.88rem;">
+                        <input type="text" id="var-value" placeholder="值" style="flex:1; padding:0.4rem 0.6rem; border:1px solid var(--border); border-radius:4px; font-size:0.88rem;">
+                        <button class="btn btn-sm btn-primary" onclick="addVar()">添加</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tab: History -->
+        <div class="tab-content" id="tab-history">
+            <div class="card" style="padding:0; overflow:hidden;">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th style="width:80px;">ID</th>
+                            <th style="width:80px;">状态</th>
+                            <th>步骤进度</th>
+                            <th style="width:90px;">耗时</th>
+                            <th>时间</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-body">
+                        <tr><td colspan="5" class="loading">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        var planName = '{{ plan_name }}';
+        var planData = null;
+        var globalVars = {};
+
+        function switchTab(tabId, btn) {
+            document.querySelectorAll('.tab').forEach(function(t) { t.classList.remove('active'); });
+            document.querySelectorAll('.tab-content').forEach(function(t) { t.classList.remove('active'); });
+            btn.classList.add('active');
+            document.getElementById('tab-' + tabId).classList.add('active');
+
+            if (tabId === 'history') loadHistory();
+            if (tabId === 'yaml' && !document.getElementById('yaml-editor').value) reloadYaml();
+        }
+
+        // Load plan
+        async function loadPlan() {
+            try {
+                var res = await fetch('/api/v1/plans/' + encodeURIComponent(planName));
+                if (!res.ok) {
+                    document.getElementById('dag-canvas').innerHTML =
+                        '<div class="empty">计划未找到: ' + escapeHtml(planName) + '</div>';
+                    return;
+                }
+                planData = await res.json();
+                document.getElementById('plan-desc').textContent = planData.desc || '';
+
+                // Webhook URL
+                var baseUrl = window.location.origin;
+                document.getElementById('webhook-url').textContent =
+                    baseUrl + '/api/v1/plans/' + encodeURIComponent(planName) + '/hook';
+
+                renderDAG(planData.steps || []);
+            } catch (e) {
+                document.getElementById('dag-canvas').innerHTML =
+                    '<div class="empty">加载失败: ' + escapeHtml(e.message) + '</div>';
+            }
+        }
+
+        // DAG visualization
+        function renderDAG(steps) {
+            if (!steps.length) {
+                document.getElementById('dag-canvas').innerHTML = '<div class="empty">无步骤定义</div>';
+                return;
+            }
+
+            // Build adjacency and levels (topological layers)
+            var stepMap = {};
+            steps.forEach(function(s) { stepMap[s.name] = s; });
+
+            // Compute levels
+            var levels = {};
+            function getLevel(name) {
+                if (levels[name] !== undefined) return levels[name];
+                var step = stepMap[name];
+                if (!step || !step.needs || step.needs.length === 0) {
+                    levels[name] = 0;
+                    return 0;
+                }
+                var maxParent = 0;
+                step.needs.forEach(function(n) {
+                    maxParent = Math.max(maxParent, getLevel(n) + 1);
+                });
+                levels[name] = maxParent;
+                return maxParent;
+            }
+            steps.forEach(function(s) { getLevel(s.name); });
+
+            // Group by level
+            var levelGroups = {};
+            var maxLevel = 0;
+            steps.forEach(function(s) {
+                var lvl = levels[s.name] || 0;
+                if (!levelGroups[lvl]) levelGroups[lvl] = [];
+                levelGroups[lvl].push(s);
+                if (lvl > maxLevel) maxLevel = lvl;
+            });
+
+            // Render as layered grid
+            var html = '<div style="display:flex; flex-direction:column; gap:2rem; align-items:center; padding:1rem;">';
+
+            for (var lvl = 0; lvl <= maxLevel; lvl++) {
+                var group = levelGroups[lvl] || [];
+                html += '<div style="display:flex; gap:1.5rem; flex-wrap:wrap; justify-content:center;">';
+                group.forEach(function(s) {
+                    html += '<div class="dag-node" onclick="showStepDetail(\'' + escapeHtml(s.name) + '\')">' +
+                        '<div class="node-name">' + escapeHtml(s.name) + '</div>' +
+                        '<div class="node-status">' + escapeHtml(s.task) + '</div>' +
+                        '</div>';
+                });
+                html += '</div>';
+
+                // Arrow between levels
+                if (lvl < maxLevel) {
+                    html += '<div style="text-align:center; color:var(--text-muted); font-size:1.2rem;">&#8595;</div>';
+                }
+            }
+
+            html += '</div>';
+            document.getElementById('dag-canvas').innerHTML = html;
+        }
+
+        function showStepDetail(stepName) {
+            if (!planData) return;
+            var step = null;
+            (planData.steps || []).forEach(function(s) {
+                if (s.name === stepName) step = s;
+            });
+            if (!step) return;
+
+            document.getElementById('step-detail').style.display = '';
+            document.getElementById('step-detail-title').textContent = step.name;
+
+            var html = '<div class="detail-grid">' +
+                '<div class="detail-field"><span class="detail-label">任务</span><a href="/tasks/' + encodeURIComponent(step.task) + '">' + escapeHtml(step.task) + '</a></div>' +
+                '<div class="detail-field"><span class="detail-label">依赖</span>' + escapeHtml((step.needs || []).join(', ') || '无') + '</div>';
+
+            if (step.vars && Object.keys(step.vars).length > 0) {
+                html += '<div class="detail-field"><span class="detail-label">变量</span><code>' +
+                    escapeHtml(JSON.stringify(step.vars)) + '</code></div>';
+            }
+            if (step.artifacts && step.artifacts.length > 0) {
+                html += '<div class="detail-field"><span class="detail-label">产物</span>' + escapeHtml(step.artifacts.join(', ')) + '</div>';
+            }
+            html += '</div>';
+            document.getElementById('step-detail-content').innerHTML = html;
+        }
+
+        // YAML editor
+        async function reloadYaml() {
+            try {
+                var res = await fetch('/api/v1/plans/' + encodeURIComponent(planName) + '/yaml');
+                var data = await res.json();
+                document.getElementById('yaml-editor').value = data.content || data.yaml || '';
+            } catch (e) {
+                showToast('加载 YAML 失败: ' + e.message, 'error');
+            }
+        }
+
+        async function saveYaml() {
+            var content = document.getElementById('yaml-editor').value;
+            try {
+                var res = await fetch('/api/v1/plans/' + encodeURIComponent(planName) + '/yaml', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({content: content})
+                });
+                var data = await res.json();
+                if (data.ok) {
+                    showToast('保存成功', 'success');
+                    loadPlan(); // Refresh DAG
+                } else {
+                    showToast('保存失败: ' + (data.error || '未知'), 'error');
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e.message, 'error');
+            }
+        }
+
+        // Global vars
+        function addVar() {
+            var key = document.getElementById('var-key').value.trim();
+            var val = document.getElementById('var-value').value.trim();
+            if (!key) return;
+            globalVars[key] = val;
+            renderVars();
+            document.getElementById('var-key').value = '';
+            document.getElementById('var-value').value = '';
+        }
+
+        function removeVar(key) {
+            delete globalVars[key];
+            renderVars();
+        }
+
+        function renderVars() {
+            var container = document.getElementById('global-vars');
+            var keys = Object.keys(globalVars);
+            if (keys.length === 0) {
+                container.innerHTML = '<div style="color:var(--text-muted); font-size:0.88rem;">在此处设置的变量将覆盖各步骤中定义的同名变量</div>';
+                return;
+            }
+            var html = '';
+            keys.forEach(function(k) {
+                html += '<div style="display:flex; gap:0.5rem; align-items:center; padding:0.3rem 0; border-bottom:1px solid var(--border); font-size:0.88rem;">' +
+                    '<code style="flex:1;">' + escapeHtml(k) + '</code>' +
+                    '<span style="flex:1;">' + escapeHtml(globalVars[k]) + '</span>' +
+                    '<button class="btn btn-sm btn-danger" onclick="removeVar(\'' + escapeHtml(k) + '\')">移除</button>' +
+                    '</div>';
+            });
+            container.innerHTML = html;
+        }
+
+        // Run plan
+        async function runPlan() {
+            try {
+                var res = await fetch('/api/v1/plans/' + encodeURIComponent(planName) + '/run', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({vars: globalVars})
+                });
+                var data = await res.json();
+                if (data.run_id) {
+                    showToast('计划已启动', 'success');
+                    window.location.href = '/executions/' + data.run_id;
+                } else {
+                    showToast('启动失败: ' + (data.error || '未知'), 'error');
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e.message, 'error');
+            }
+        }
+
+        // Delete plan
+        async function deletePlan() {
+            if (!confirm('确定删除计划 "' + planName + '"?')) return;
+            try {
+                var res = await fetch('/api/v1/plans/' + encodeURIComponent(planName), {method: 'DELETE'});
+                var data = await res.json();
+                if (data.ok) {
+                    showToast('已删除', 'success');
+                    setTimeout(function() { window.location = '/plans'; }, 500);
+                } else {
+                    showToast('删除失败: ' + (data.error || '未知'), 'error');
+                }
+            } catch (e) {
+                showToast('请求失败: ' + e.message, 'error');
+            }
+        }
+
+        function copyWebhook() {
+            var url = document.getElementById('webhook-url').textContent;
+            navigator.clipboard.writeText(url).then(function() {
+                showToast('已复制', 'success');
+            }).catch(function() {
+                showToast('复制失败', 'error');
+            });
+        }
+
+        // History
+        async function loadHistory() {
+            try {
+                var res = await fetch('/api/v1/plans/runs?plan=' + encodeURIComponent(planName));
+                var data = await res.json();
+                var runs = data.runs || [];
+
+                if (runs.length === 0) {
+                    document.getElementById('history-body').innerHTML =
+                        '<tr><td colspan="5" class="empty">暂无执行记录</td></tr>';
+                    return;
+                }
+
+                var html = '';
+                runs.forEach(function(r) {
+                    var dur = '-';
+                    if (r.duration) dur = formatDurationSec(r.duration);
+                    else if (r.started_at && r.finished_at) dur = formatDuration(r.started_at, r.finished_at);
+
+                    var progress = '';
+                    if (r.total_steps) {
+                        progress = (r.completed_steps || 0) + '/' + r.total_steps;
+                    }
+
+                    html += '<tr onclick="window.location=\'/executions/' + encodeURIComponent(r.id) + '\'" style="cursor:pointer;">' +
+                        '<td><code style="font-size:0.8rem;">' + escapeHtml((r.id || '').substring(0, 8)) + '</code></td>' +
+                        '<td>' + statusBadgeHtml(r.status) + '</td>' +
+                        '<td>' + escapeHtml(progress) + '</td>' +
+                        '<td>' + escapeHtml(dur) + '</td>' +
+                        '<td style="font-size:0.82rem; color:var(--text-muted);">' + formatTimeAgo(r.created_at) + '</td>' +
+                        '</tr>';
+                });
+                document.getElementById('history-body').innerHTML = html;
+            } catch (e) {
+                document.getElementById('history-body').innerHTML =
+                    '<tr><td colspan="5" class="empty">加载失败: ' + escapeHtml(e.message) + '</td></tr>';
+            }
+        }
+
+        // Init
+        loadPlan();
+    </script>
+</body>
+</html>
