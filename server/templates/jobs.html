@@ -21,6 +21,7 @@
     </nav>
 
     <main class="container">
+        <div class="toast-container" id="toast-container"></div>
         <div class="page-header">
             <h1>执行记录</h1>
             <p>任务执行历史与日志查看</p>
@@ -93,6 +94,20 @@
     <script>
         var socket = io();
         var selectedJobId = new URLSearchParams(window.location.search).get('id');
+
+        window.showToast = function(msg, type, duration) {
+            type = type || 'info';
+            duration = duration || 3000;
+            var container = document.getElementById('toast-container');
+            var toast = document.createElement('div');
+            toast.className = 'toast toast-' + type;
+            toast.textContent = msg;
+            container.appendChild(toast);
+            setTimeout(function() {
+                toast.style.animation = 'toast-out 0.3s ease-in forwards';
+                setTimeout(function() { toast.remove(); }, 300);
+            }, duration);
+        };
 
         var statusLabels = {
             success: '成功', failed: '失败', error: '错误',
@@ -307,7 +322,7 @@
                 await fetch('/api/v1/jobs/' + encodeURIComponent(jobId) + '/cancel', {method: 'POST'});
                 loadJobs();
             } catch (e) {
-                alert('取消失败: ' + e.message);
+                showToast('取消失败: ' + e.message, 'error');
             }
         }
 

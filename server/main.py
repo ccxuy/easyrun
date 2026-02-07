@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from threading import Lock
 
+import yaml
+
 from flask import Flask, render_template, jsonify, request, Response
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
@@ -32,6 +34,83 @@ if not os.path.isfile(YQ):
 def strip_ansi(text):
     """清除 ANSI 转义序列"""
     return re.sub(r'\033\[[0-9;]*m', '', text)
+
+
+# =============================================================================
+# YAML 缓存基础设施
+# =============================================================================
+
+_tree_cache = {'result': None, 'mtimes': {}}
+_tree_cache_lock = Lock()
+
+
+def _load_yaml_file(filepath):
+    """安全加载 YAML 文件"""
+    with open(filepath, 'r', encoding='utf-8') as f:
+        return yaml.safe_load(f) or {}
+
+
+def _get_file_mtimes():
+    """收集影响任务树的所有文件 mtime"""
+    mtimes = {}
+    # Taskfile.yml
+    taskfile = os.path.join(EZ_ROOT, 'Taskfile.yml')
+    if os.path.isfile(taskfile):
+        mtimes[taskfile] = os.path.getmtime(taskfile)
+    # tasks/*/task.yml 和 tasks/*/Taskfile.yml
+    tasks_dir = os.path.join(EZ_ROOT, 'tasks')
+    if os.path.isdir(tasks_dir):
+        for entry in os.listdir(tasks_dir):
+            for fname in ('task.yml', 'Taskfile.yml'):
+                fpath = os.path.join(tasks_dir, entry, fname)
+                if os.path.isfile(fpath):
+                    mtimes[fpath] = os.path.getmtime(fpath)
+    # lib/tools/*.yml
+    tools_dir = os.path.join(EZ_ROOT, 'lib', 'tools')
+    if os.path.isdir(tools_dir):
+        for f in os.listdir(tools_dir):
+            if f.endswith('.yml'):
+                fpath = os.path.join(tools_dir, f)
+                mtimes[fpath] = os.path.getmtime(fpath)
+    # includes (scan from Taskfile.yml)
+    if os.path.isfile(taskfile):
+        try:
+            data = _load_yaml_file(taskfile)
+            for ns, inc_val in (data.get('includes') or {}).items():
+                inc_path = inc_val if isinstance(inc_val, str) else (inc_val or {}).get('taskfile', '')
+                if inc_path:
+                    inc_file = os.path.join(EZ_ROOT, inc_path)
+                    if os.path.isfile(inc_file):
+                        mtimes[inc_file] = os.path.getmtime(inc_file)
+                        # sub-includes
+                        try:
+                            sub_data = _load_yaml_file(inc_file)
+                            for sub_ns, sub_val in (sub_data.get('includes') or {}).items():
+                                sub_path = sub_val if isinstance(sub_val, str) else (sub_val or {}).get('taskfile', '')
+                                if sub_path:
+                                    sub_file = os.path.join(os.path.dirname(inc_file), sub_path)
+                                    if os.path.isfile(sub_file):
+                                        mtimes[sub_file] = os.path.getmtime(sub_file)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+    return mtimes
+
+
+def _is_cache_valid():
+    """检查缓存是否仍然有效"""
+    if _tree_cache['result'] is None:
+        return False
+    return _get_file_mtimes() == _tree_cache['mtimes']
+
+
+def _invalidate_cache():
+    """清除缓存"""
+    with _tree_cache_lock:
+        _tree_cache['result'] = None
+        _tree_cache['mtimes'] = {}
+
 
 # Flask 应用
 app = Flask(__name__,
@@ -618,107 +697,64 @@ def api_executions():
 
 @app.route('/api/v1/tasks/tree', methods=['GET'])
 def api_task_tree():
-    """返回树形任务结构 (直接解析 YAML，避免 ANSI 问题)"""
+    """返回树形任务结构 (PyYAML 解析, mtime 缓存)"""
     try:
+        with _tree_cache_lock:
+            if _is_cache_valid():
+                return jsonify({'tree': _tree_cache['result']})
+
         tasks_flat = []
 
         # 1. 读 Taskfile.yml 获取行内任务
         taskfile = os.path.join(EZ_ROOT, 'Taskfile.yml')
         if os.path.isfile(taskfile):
-            # 获取所有 task 名称
-            result = subprocess.run(
-                [YQ, 'eval', '.tasks | keys | .[]', taskfile],
-                capture_output=True, text=True, timeout=10
-            )
-            for name in result.stdout.strip().split('\n'):
-                name = name.strip()
-                if not name:
-                    continue
-                # 获取 desc
-                desc_result = subprocess.run(
-                    [YQ, 'eval', f'.tasks."{name}".desc // ""', taskfile],
-                    capture_output=True, text=True, timeout=5
-                )
-                desc = desc_result.stdout.strip().strip('"')
-                # 检查是否有 ez-params
-                params_result = subprocess.run(
-                    [YQ, 'eval', f'.tasks."{name}".ez-params | length', taskfile],
-                    capture_output=True, text=True, timeout=5
-                )
-                params_count = params_result.stdout.strip()
-                has_params = params_count not in ('0', 'null', '')
+            data = _load_yaml_file(taskfile)
+            tasks_map = data.get('tasks') or {}
+
+            for name, task_def in tasks_map.items():
+                if not isinstance(task_def, dict):
+                    task_def = {}
+                desc = task_def.get('desc', '')
+                ez_params = task_def.get('ez-params') or []
+                has_params = len(ez_params) > 0
                 tasks_flat.append({
                     'name': name, 'desc': desc, 'type': 'inline',
                     'has_params': has_params
                 })
 
             # 处理 includes 命名空间
-            inc_result = subprocess.run(
-                [YQ, 'eval', '.includes | keys | .[]', taskfile],
-                capture_output=True, text=True, timeout=5
-            )
-            for ns in inc_result.stdout.strip().split('\n'):
-                ns = ns.strip()
-                if not ns:
-                    continue
-                # 获取 include 的 taskfile 路径
-                inc_path_result = subprocess.run(
-                    [YQ, 'eval', f'.includes."{ns}".taskfile // .includes."{ns}"', taskfile],
-                    capture_output=True, text=True, timeout=5
-                )
-                inc_path = inc_path_result.stdout.strip().strip('"')
+            includes = data.get('includes') or {}
+            for ns, inc_val in includes.items():
+                inc_path = inc_val if isinstance(inc_val, str) else (inc_val or {}).get('taskfile', '')
                 inc_file = os.path.join(EZ_ROOT, inc_path) if inc_path else None
                 children = []
+
                 if inc_file and os.path.isfile(inc_file):
-                    child_result = subprocess.run(
-                        [YQ, 'eval', '.tasks | keys | .[]', inc_file],
-                        capture_output=True, text=True, timeout=5
-                    )
-                    for child_name in child_result.stdout.strip().split('\n'):
-                        child_name = child_name.strip()
-                        if not child_name:
-                            continue
-                        child_desc_result = subprocess.run(
-                            [YQ, 'eval', f'.tasks."{child_name}".desc // ""', inc_file],
-                            capture_output=True, text=True, timeout=5
-                        )
-                        child_desc = child_desc_result.stdout.strip().strip('"')
+                    inc_data = _load_yaml_file(inc_file)
+                    inc_tasks = inc_data.get('tasks') or {}
+                    for child_name, child_def in inc_tasks.items():
+                        if not isinstance(child_def, dict):
+                            child_def = {}
                         children.append({
-                            'name': f'{ns}:{child_name}', 'desc': child_desc,
+                            'name': f'{ns}:{child_name}',
+                            'desc': child_def.get('desc', ''),
                             'type': 'inline', 'has_params': False
                         })
-                    # 也扫描 includes 内的子 includes
-                    sub_inc_result = subprocess.run(
-                        [YQ, 'eval', '.includes | keys | .[]', inc_file],
-                        capture_output=True, text=True, timeout=5
-                    )
-                    for sub_ns in sub_inc_result.stdout.strip().split('\n'):
-                        sub_ns = sub_ns.strip()
-                        if not sub_ns:
-                            continue
-                        sub_path_result = subprocess.run(
-                            [YQ, 'eval', f'.includes."{sub_ns}".taskfile // .includes."{sub_ns}"', inc_file],
-                            capture_output=True, text=True, timeout=5
-                        )
-                        sub_path = sub_path_result.stdout.strip().strip('"')
-                        # 相对于 inc_file 的目录
+
+                    # 子 includes (2 层深度)
+                    sub_includes = inc_data.get('includes') or {}
+                    for sub_ns, sub_val in sub_includes.items():
+                        sub_path = sub_val if isinstance(sub_val, str) else (sub_val or {}).get('taskfile', '')
                         sub_file = os.path.join(os.path.dirname(inc_file), sub_path) if sub_path else None
                         if sub_file and os.path.isfile(sub_file):
-                            sub_child_result = subprocess.run(
-                                [YQ, 'eval', '.tasks | keys | .[]', sub_file],
-                                capture_output=True, text=True, timeout=5
-                            )
-                            for sc_name in sub_child_result.stdout.strip().split('\n'):
-                                sc_name = sc_name.strip()
-                                if not sc_name:
-                                    continue
-                                sc_desc_result = subprocess.run(
-                                    [YQ, 'eval', f'.tasks."{sc_name}".desc // ""', sub_file],
-                                    capture_output=True, text=True, timeout=5
-                                )
-                                sc_desc = sc_desc_result.stdout.strip().strip('"')
+                            sub_data = _load_yaml_file(sub_file)
+                            sub_tasks = sub_data.get('tasks') or {}
+                            for sc_name, sc_def in sub_tasks.items():
+                                if not isinstance(sc_def, dict):
+                                    sc_def = {}
                                 children.append({
-                                    'name': f'{ns}:{sc_name}', 'desc': sc_desc,
+                                    'name': f'{ns}:{sc_name}',
+                                    'desc': sc_def.get('desc', ''),
                                     'type': 'inline', 'has_params': False
                                 })
 
@@ -738,21 +774,13 @@ def api_task_tree():
                 if os.path.isdir(entry_path) and os.path.isfile(tf):
                     desc = ''
                     has_params = False
-                    # 读 task.yml 元数据
                     meta = os.path.join(entry_path, 'task.yml')
                     if os.path.isfile(meta):
-                        desc_result = subprocess.run(
-                            [YQ, 'eval', '.desc // ""', meta],
-                            capture_output=True, text=True, timeout=5
-                        )
-                        desc = desc_result.stdout.strip().strip('"')
-                        params_result = subprocess.run(
-                            [YQ, 'eval', '.params | length', meta],
-                            capture_output=True, text=True, timeout=5
-                        )
-                        pc = params_result.stdout.strip()
-                        has_params = pc not in ('0', 'null', '')
-                    # 已在行内列表中则更新
+                        meta_data = _load_yaml_file(meta)
+                        desc = meta_data.get('desc', '')
+                        params = meta_data.get('params') or []
+                        has_params = len(params) > 0
+
                     found = False
                     for t in tasks_flat:
                         if t.get('name') == entry and t.get('type') != 'namespace':
@@ -776,21 +804,19 @@ def api_task_tree():
             for f in sorted(os.listdir(tools_dir)):
                 if f.endswith('.yml'):
                     tool_path = os.path.join(tools_dir, f)
-                    name_result = subprocess.run(
-                        [YQ, 'eval', '.name // ""', tool_path],
-                        capture_output=True, text=True, timeout=5
-                    )
-                    tool_name = name_result.stdout.strip().strip('"')
-                    desc_result = subprocess.run(
-                        [YQ, 'eval', '.desc // ""', tool_path],
-                        capture_output=True, text=True, timeout=5
-                    )
-                    tool_desc = desc_result.stdout.strip().strip('"')
+                    tool_data = _load_yaml_file(tool_path)
+                    tool_name = tool_data.get('name', '')
+                    tool_desc = tool_data.get('desc', '')
                     if tool_name:
                         tasks_flat.append({
                             'name': tool_name, 'desc': tool_desc, 'type': 'tool',
                             'has_params': False
                         })
+
+        # 更新缓存
+        with _tree_cache_lock:
+            _tree_cache['result'] = tasks_flat
+            _tree_cache['mtimes'] = _get_file_mtimes()
 
         return jsonify({'tree': tasks_flat})
     except Exception as e:
@@ -799,70 +825,45 @@ def api_task_tree():
 
 @app.route('/api/v1/tasks/<task_name>/params', methods=['GET'])
 def api_task_params(task_name):
-    """获取任务参数定义 (结构化 JSON)"""
+    """获取任务参数定义 (结构化 JSON, PyYAML)"""
     try:
-        taskfile = os.path.join(EZ_ROOT, 'Taskfile.yml')
         params = []
         desc = ''
 
         # 目录任务: 读 task.yml
         task_meta = os.path.join(EZ_ROOT, 'tasks', task_name, 'task.yml')
         if os.path.isfile(task_meta):
-            desc_result = subprocess.run(
-                [YQ, 'eval', '.desc // ""', task_meta],
-                capture_output=True, text=True, timeout=5
-            )
-            desc = desc_result.stdout.strip().strip('"')
-            params_result = subprocess.run(
-                [YQ, 'eval', '-o=json', '.params // []', task_meta],
-                capture_output=True, text=True, timeout=5
-            )
-            if params_result.stdout.strip():
-                try:
-                    params = json.loads(params_result.stdout)
-                except json.JSONDecodeError:
-                    pass
+            meta_data = _load_yaml_file(task_meta)
+            desc = meta_data.get('desc', '')
+            params = meta_data.get('params') or []
 
         # 行内任务: 读 Taskfile.yml 的 ez-params
-        if not params and os.path.isfile(taskfile):
-            # 处理带命名空间的任务名 (如 selftest:xxx → 查对应 include 文件)
+        if not params:
+            taskfile = os.path.join(EZ_ROOT, 'Taskfile.yml')
             actual_task = task_name
             actual_file = taskfile
             if ':' in task_name:
                 ns, sub = task_name.split(':', 1)
-                inc_path_result = subprocess.run(
-                    [YQ, 'eval', f'.includes."{ns}".taskfile // .includes."{ns}" // ""', taskfile],
-                    capture_output=True, text=True, timeout=5
-                )
-                inc_path = inc_path_result.stdout.strip().strip('"')
-                if inc_path:
-                    actual_file = os.path.join(EZ_ROOT, inc_path)
+                if os.path.isfile(taskfile):
+                    tf_data = _load_yaml_file(taskfile)
+                    inc_val = (tf_data.get('includes') or {}).get(ns, '')
+                    inc_path = inc_val if isinstance(inc_val, str) else (inc_val or {}).get('taskfile', '')
+                    if inc_path:
+                        actual_file = os.path.join(EZ_ROOT, inc_path)
                 actual_task = sub
 
             if os.path.isfile(actual_file):
-                desc_result = subprocess.run(
-                    [YQ, 'eval', f'.tasks."{actual_task}".desc // ""', actual_file],
-                    capture_output=True, text=True, timeout=5
-                )
-                desc = desc_result.stdout.strip().strip('"')
-                params_result = subprocess.run(
-                    [YQ, 'eval', '-o=json', f'.tasks."{actual_task}".ez-params // []', actual_file],
-                    capture_output=True, text=True, timeout=5
-                )
-                if params_result.stdout.strip():
-                    try:
-                        params = json.loads(params_result.stdout)
-                    except json.JSONDecodeError:
-                        pass
+                file_data = _load_yaml_file(actual_file)
+                task_def = (file_data.get('tasks') or {}).get(actual_task) or {}
+                if isinstance(task_def, dict):
+                    desc = task_def.get('desc', '') or desc
+                    params = task_def.get('ez-params') or []
 
         # 工具任务: 读 lib/tools/<name>.yml
         tool_file = os.path.join(EZ_ROOT, 'lib', 'tools', f'{task_name}.yml')
         if not params and os.path.isfile(tool_file):
-            desc_result = subprocess.run(
-                [YQ, 'eval', '.desc // ""', tool_file],
-                capture_output=True, text=True, timeout=5
-            )
-            desc = desc_result.stdout.strip().strip('"')
+            tool_data = _load_yaml_file(tool_file)
+            desc = tool_data.get('desc', '') or desc
 
         return jsonify({
             'name': task_name,
@@ -889,28 +890,27 @@ def api_task_yaml(task_name):
             with open(tool_file, 'r', encoding='utf-8') as f:
                 return jsonify({'yaml': f.read(), 'file': f'lib/tools/{task_name}.yml', 'type': 'tool'})
 
-        # 行内任务: 提取 Taskfile.yml 中对应 task 片段
+        # 行内任务: 用 PyYAML 提取对应 task 片段
         taskfile = os.path.join(EZ_ROOT, 'Taskfile.yml')
         actual_task = task_name
         actual_file = taskfile
         if ':' in task_name:
             ns, sub = task_name.split(':', 1)
-            inc_result = subprocess.run(
-                [YQ, 'eval', f'.includes."{ns}".taskfile // .includes."{ns}" // ""', taskfile],
-                capture_output=True, text=True, timeout=5
-            )
-            inc_path = inc_result.stdout.strip().strip('"')
-            if inc_path:
-                actual_file = os.path.join(EZ_ROOT, inc_path)
+            if os.path.isfile(taskfile):
+                tf_data = _load_yaml_file(taskfile)
+                inc_val = (tf_data.get('includes') or {}).get(ns, '')
+                inc_path = inc_val if isinstance(inc_val, str) else (inc_val or {}).get('taskfile', '')
+                if inc_path:
+                    actual_file = os.path.join(EZ_ROOT, inc_path)
             actual_task = sub
 
         if os.path.isfile(actual_file):
-            result = subprocess.run(
-                [YQ, 'eval', f'.tasks."{actual_task}"', actual_file],
-                capture_output=True, text=True, timeout=5
-            )
-            rel_path = os.path.relpath(actual_file, EZ_ROOT)
-            return jsonify({'yaml': result.stdout, 'file': rel_path, 'task_key': actual_task, 'type': 'inline'})
+            file_data = _load_yaml_file(actual_file)
+            task_def = (file_data.get('tasks') or {}).get(actual_task)
+            if task_def is not None:
+                yaml_str = yaml.dump({actual_task: task_def}, default_flow_style=False, allow_unicode=True)
+                rel_path = os.path.relpath(actual_file, EZ_ROOT)
+                return jsonify({'yaml': yaml_str, 'file': rel_path, 'task_key': actual_task, 'type': 'inline'})
 
         return jsonify({'error': 'Task not found'}), 404
     except Exception as e:
@@ -938,6 +938,7 @@ def api_save_task_yaml(task_name):
         with open(target, 'w', encoding='utf-8') as f:
             f.write(yaml_content)
 
+        _invalidate_cache()
         return jsonify({'ok': True, 'file': os.path.relpath(target, EZ_ROOT)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -975,6 +976,7 @@ def api_save_plan_yaml(plan_name):
         with open(plan_file, 'w', encoding='utf-8') as f:
             f.write(yaml_content)
 
+        _invalidate_cache()
         return jsonify({'ok': True, 'file': os.path.relpath(plan_file, EZ_ROOT)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -985,23 +987,19 @@ def api_save_plan_yaml(plan_name):
 
 @app.route('/api/v1/plans', methods=['GET'])
 def api_list_plans():
-    """列出所有计划"""
+    """列出所有计划 (PyYAML)"""
     plans = []
     plans_dir = os.path.join(EZ_ROOT, 'plans')
     if os.path.isdir(plans_dir):
         for f in os.listdir(plans_dir):
             if f.endswith('.yml') or f.endswith('.yaml'):
                 name = os.path.splitext(f)[0]
-                # 读取 plan 概要
+                desc = ''
                 try:
-                    result = subprocess.run(
-                        [YQ, 'eval', '.name // .desc // ""',
-                         os.path.join(plans_dir, f)],
-                        capture_output=True, text=True, timeout=5
-                    )
-                    desc = result.stdout.strip()
+                    plan_data = _load_yaml_file(os.path.join(plans_dir, f))
+                    desc = plan_data.get('name', '') or plan_data.get('desc', '')
                 except Exception:
-                    desc = ''
+                    pass
                 plans.append({'name': name, 'file': f, 'desc': desc})
 
     return jsonify({'plans': plans})
@@ -1009,7 +1007,7 @@ def api_list_plans():
 
 @app.route('/api/v1/plans/<plan_name>', methods=['GET'])
 def api_get_plan(plan_name):
-    """获取计划详情 (结构化 JSON)"""
+    """获取计划详情 (PyYAML)"""
     try:
         plan_file = os.path.join(EZ_ROOT, 'plans', f'{plan_name}.yml')
         if not os.path.isfile(plan_file):
@@ -1017,18 +1015,11 @@ def api_get_plan(plan_name):
         if not os.path.isfile(plan_file):
             return jsonify({'error': f'Plan not found: {plan_name}'}), 404
 
-        # 读取原始 YAML
         with open(plan_file, 'r', encoding='utf-8') as f:
             yaml_content = f.read()
 
-        # 用 yq 解析结构化数据
-        result = subprocess.run(
-            [YQ, 'eval', '-o=json', '.', plan_file],
-            capture_output=True, text=True, timeout=10
-        )
-        plan_data = json.loads(result.stdout) if result.stdout.strip() else {}
+        plan_data = yaml.safe_load(yaml_content) or {}
 
-        # 提取步骤
         steps = []
         for s in plan_data.get('steps', []):
             steps.append({
@@ -1222,6 +1213,140 @@ def api_delete_chart(chart_id):
             conn.execute('DELETE FROM charts WHERE id = ?', (chart_id,))
             conn.commit()
     return jsonify({'status': 'deleted'})
+
+
+# =============================================================================
+# API Routes - Cache Management
+# =============================================================================
+
+@app.route('/api/v1/cache/clear', methods=['POST'])
+def api_clear_cache():
+    """手动清除缓存"""
+    _invalidate_cache()
+    return jsonify({'status': 'ok'})
+
+
+# =============================================================================
+# API Routes - File Browser (目录任务)
+# =============================================================================
+
+@app.route('/api/v1/tasks/<task_name>/files', methods=['GET'])
+def api_task_files(task_name):
+    """列出目录任务的文件列表"""
+    try:
+        task_dir = os.path.join(EZ_ROOT, 'tasks', task_name)
+        if not os.path.isdir(task_dir):
+            return jsonify({'error': 'Task directory not found'}), 404
+
+        files = []
+        for root, dirs, filenames in os.walk(task_dir):
+            # 跳过隐藏目录和 workspace
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d != 'workspace']
+            for fname in sorted(filenames):
+                if fname.startswith('.'):
+                    continue
+                full_path = os.path.join(root, fname)
+                rel_path = os.path.relpath(full_path, task_dir)
+                try:
+                    size = os.path.getsize(full_path)
+                except OSError:
+                    size = 0
+                files.append({
+                    'path': rel_path,
+                    'name': fname,
+                    'size': size
+                })
+
+        return jsonify({'task': task_name, 'files': files})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v1/tasks/<task_name>/files/<path:file_path>', methods=['GET'])
+def api_task_file_content(task_name, file_path):
+    """读取目录任务中的单个文件内容"""
+    try:
+        task_dir = os.path.join(EZ_ROOT, 'tasks', task_name)
+        if not os.path.isdir(task_dir):
+            return jsonify({'error': 'Task directory not found'}), 404
+
+        # 安全: 防目录穿越
+        full_path = os.path.normpath(os.path.join(task_dir, file_path))
+        if not full_path.startswith(os.path.normpath(task_dir) + os.sep) and full_path != os.path.normpath(task_dir):
+            return jsonify({'error': 'Access denied'}), 403
+
+        if not os.path.isfile(full_path):
+            return jsonify({'error': 'File not found'}), 404
+
+        # 限制文件大小 (1MB)
+        size = os.path.getsize(full_path)
+        if size > 1024 * 1024:
+            return jsonify({'error': 'File too large (>1MB)'}), 413
+
+        with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+
+        return jsonify({
+            'path': file_path,
+            'content': content,
+            'size': size
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# =============================================================================
+# API Routes - Task to Plan Conversion
+# =============================================================================
+
+@app.route('/api/v1/tasks/<task_name>/to-plan', methods=['POST'])
+def api_task_to_plan(task_name):
+    """将任务转换为单步 Plan"""
+    try:
+        data = request.json or {}
+        plan_name = data.get('plan_name', '').strip()
+        task_vars = data.get('vars', {})
+        overwrite = data.get('overwrite', False)
+
+        if not plan_name:
+            return jsonify({'error': 'plan_name required'}), 400
+
+        # 安全: 只允许合法文件名
+        if not re.match(r'^[a-zA-Z0-9_-]+$', plan_name):
+            return jsonify({'error': 'plan_name 只允许字母、数字、下划线和连字符'}), 400
+
+        plans_dir = os.path.join(EZ_ROOT, 'plans')
+        os.makedirs(plans_dir, exist_ok=True)
+        plan_file = os.path.join(plans_dir, f'{plan_name}.yml')
+
+        if os.path.isfile(plan_file) and not overwrite:
+            return jsonify({'error': f'Plan "{plan_name}" already exists'}), 409
+
+        # 构造 Plan YAML
+        plan_data = {
+            'name': plan_name,
+            'desc': f'从任务 {task_name} 创建',
+            'steps': [{
+                'name': task_name.replace(':', '-'),
+                'task': task_name,
+            }]
+        }
+
+        if task_vars:
+            plan_data['steps'][0]['vars'] = task_vars
+
+        yaml_content = yaml.dump(plan_data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+        with open(plan_file, 'w', encoding='utf-8') as f:
+            f.write(yaml_content)
+
+        return jsonify({
+            'ok': True,
+            'plan_name': plan_name,
+            'file': f'plans/{plan_name}.yml'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # =============================================================================

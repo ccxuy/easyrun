@@ -21,6 +21,7 @@
     </nav>
 
     <main class="container">
+        <div class="toast-container" id="toast-container"></div>
         <!-- 统计卡片 -->
         <div class="stat-grid">
             <div class="stat-card primary">
@@ -96,6 +97,20 @@
 
     <script>
         var socket = io();
+
+        window.showToast = function(msg, type, duration) {
+            type = type || 'info';
+            duration = duration || 3000;
+            var container = document.getElementById('toast-container');
+            var toast = document.createElement('div');
+            toast.className = 'toast toast-' + type;
+            toast.textContent = msg;
+            container.appendChild(toast);
+            setTimeout(function() {
+                toast.style.animation = 'toast-out 0.3s ease-in forwards';
+                setTimeout(function() { toast.remove(); }, 300);
+            }, duration);
+        };
 
         var statusLabels = {
             success: '成功', failed: '失败', error: '错误',
@@ -237,14 +252,14 @@
                 });
                 var data = await res.json();
                 if (data.job_id) {
-                    alert('任务已提交: ' + data.job_id);
+                    showToast('任务已提交: ' + data.job_id, 'success');
                     loadJobs();
                     loadStats();
                 } else {
-                    alert('提交失败: ' + (data.error || '未知错误'));
+                    showToast('提交失败: ' + (data.error || '未知错误'), 'error');
                 }
             } catch (err) {
-                alert('请求失败: ' + err.message);
+                showToast('请求失败: ' + err.message, 'error');
             }
         });
 

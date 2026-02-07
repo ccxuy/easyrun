@@ -21,6 +21,7 @@
     </nav>
 
     <main class="container">
+        <div class="toast-container" id="toast-container"></div>
         <div class="page-header">
             <h1>计划编排</h1>
             <p>DAG 依赖计划管理与可视化执行</p>
@@ -87,6 +88,20 @@
         var currentPlan = null;
         var planSteps = [];
         var planYamlContent = '';
+
+        window.showToast = function(msg, type, duration) {
+            type = type || 'info';
+            duration = duration || 3000;
+            var container = document.getElementById('toast-container');
+            var toast = document.createElement('div');
+            toast.className = 'toast toast-' + type;
+            toast.textContent = msg;
+            container.appendChild(toast);
+            setTimeout(function() {
+                toast.style.animation = 'toast-out 0.3s ease-in forwards';
+                setTimeout(function() { toast.remove(); }, 300);
+            }, duration);
+        };
 
         var statusLabels = {
             pending: '等待中', running: '运行中', success: '成功',
@@ -258,7 +273,7 @@
                     var varsKeys = step.vars ? Object.keys(step.vars) : [];
                     html += '<div class="dag-node-card" onclick="showStepDetail(\'' + escapeHtml(step.name) + '\')">';
                     html += '<div class="dag-node-name">' + escapeHtml(step.name) + '</div>';
-                    html += '<div class="dag-node-task">' + escapeHtml(step.task) + '</div>';
+                    html += '<div class="dag-node-task"><a href="/tasks?select=' + encodeURIComponent(step.task) + '" onclick="event.stopPropagation();" style="color:var(--primary);text-decoration:underline;">' + escapeHtml(step.task) + '</a></div>';
                     if (needsStr) {
                         html += '<div class="dag-node-needs">depends: ' + escapeHtml(needsStr) + '</div>';
                     }
@@ -287,7 +302,7 @@
 
             var html = '<div class="detail-row">' +
                 '<span class="detail-label">任务</span>' +
-                '<span><a href="/tasks" onclick="return false;" style="color:var(--primary);text-decoration:underline;">' +
+                '<span><a href="/tasks?select=' + encodeURIComponent(step.task) + '" style="color:var(--primary);text-decoration:underline;">' +
                 escapeHtml(step.task) + '</a></span>' +
                 '</div>';
 
@@ -437,13 +452,13 @@
                 });
                 var data = await res.json();
                 if (data.run_id) {
-                    alert('计划已提交: ' + data.run_id);
+                    showToast('计划已提交: ' + data.run_id, 'success');
                     loadPlanRuns();
                 } else {
-                    alert('提交失败: ' + (data.error || '未知错误'));
+                    showToast('提交失败: ' + (data.error || '未知错误'), 'error');
                 }
             } catch (e) {
-                alert('请求失败: ' + e.message);
+                showToast('请求失败: ' + e.message, 'error');
             }
         }
 

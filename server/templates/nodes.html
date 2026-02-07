@@ -21,6 +21,7 @@
     </nav>
 
     <main class="container">
+        <div class="toast-container" id="toast-container"></div>
         <div class="page-header">
             <h1>节点管理</h1>
             <p>查看和管理连接的工作节点</p>
@@ -58,6 +59,20 @@
 
     <script>
         var socket = io();
+
+        window.showToast = function(msg, type, duration) {
+            type = type || 'info';
+            duration = duration || 3000;
+            var container = document.getElementById('toast-container');
+            var toast = document.createElement('div');
+            toast.className = 'toast toast-' + type;
+            toast.textContent = msg;
+            container.appendChild(toast);
+            setTimeout(function() {
+                toast.style.animation = 'toast-out 0.3s ease-in forwards';
+                setTimeout(function() { toast.remove(); }, 300);
+            }, duration);
+        };
 
         var statusLabels = {
             online: '在线', offline: '离线', busy: '繁忙'
@@ -168,19 +183,17 @@
                 });
                 var data = await res.json();
                 if (data.id) {
-                    msgEl.style.color = 'var(--success, #52c41a)';
-                    msgEl.textContent = '注册成功: ' + data.id;
+                    showToast('注册成功: ' + data.id, 'success');
                     document.getElementById('reg-name').value = '';
                     document.getElementById('reg-id').value = '';
                     document.getElementById('reg-tags').value = '';
+                    document.getElementById('reg-msg').textContent = '';
                     loadNodes();
                 } else {
-                    msgEl.style.color = 'var(--danger, #ff4d4f)';
-                    msgEl.textContent = '注册失败: ' + (data.error || '未知错误');
+                    showToast('注册失败: ' + (data.error || '未知错误'), 'error');
                 }
             } catch (err) {
-                msgEl.style.color = 'var(--danger, #ff4d4f)';
-                msgEl.textContent = '请求失败: ' + err.message;
+                showToast('请求失败: ' + err.message, 'error');
             }
             return false;
         }
