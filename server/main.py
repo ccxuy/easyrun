@@ -1006,6 +1006,8 @@ def api_dashboard():
     """聚合 dashboard 数据"""
     now = datetime.now()
     cutoff_24h = (now - timedelta(hours=24)).isoformat()
+    # DB 中 created_at 可能用空格分隔 (YYYY-MM-DD HH:MM:SS), 也兼容 T 分隔
+    cutoff_24h_db = cutoff_24h.replace('T', ' ')
 
     # 活跃运行
     active_runs = []
@@ -1033,10 +1035,10 @@ def api_dashboard():
 
             # 24h 失败
             failed_24h = []
-            # jobs
+            # jobs (DB)
             rows = conn.execute(
-                "SELECT id, task, status, finished_at FROM jobs WHERE status IN ('failed', 'error') AND finished_at >= ?",
-                (cutoff_24h,)
+                "SELECT id, task, status, finished_at FROM jobs WHERE status IN ('failed', 'error') AND REPLACE(finished_at, 'T', ' ') >= ?",
+                (cutoff_24h_db,)
             ).fetchall()
             for r in rows:
                 failed_24h.append({
@@ -1046,7 +1048,8 @@ def api_dashboard():
                 })
             # from memory
             for jid, job in jobs.items():
-                if job.get('status') in ('failed', 'error') and (job.get('finished_at') or '') >= cutoff_24h:
+                fin = (job.get('finished_at') or '').replace('T', ' ')
+                if job.get('status') in ('failed', 'error') and fin >= cutoff_24h_db:
                     if not any(f['id'] == jid for f in failed_24h):
                         failed_24h.append({
                             'id': jid, 'type': 'task',
@@ -1055,8 +1058,8 @@ def api_dashboard():
                         })
             # plan runs
             rows = conn.execute(
-                "SELECT id, plan_name, status, finished_at FROM plan_runs WHERE status IN ('failed', 'error') AND finished_at >= ?",
-                (cutoff_24h,)
+                "SELECT id, plan_name, status, finished_at FROM plan_runs WHERE status IN ('failed', 'error') AND REPLACE(finished_at, 'T', ' ') >= ?",
+                (cutoff_24h_db,)
             ).fetchall()
             for r in rows:
                 failed_24h.append({
@@ -1068,10 +1071,11 @@ def api_dashboard():
             # 24h stats — 去重: 先收集内存, 再补充 DB 中不在内存的
             all_jobs_24h = {}
             for jid, job in jobs.items():
-                if (job.get('created_at') or '') >= cutoff_24h:
+                ca = (job.get('created_at') or '').replace('T', ' ')
+                if ca >= cutoff_24h_db:
                     all_jobs_24h[jid] = job.get('status')
             rows = conn.execute(
-                "SELECT id, status FROM jobs WHERE created_at >= ?", (cutoff_24h,)
+                "SELECT id, status FROM jobs WHERE REPLACE(created_at, 'T', ' ') >= ?", (cutoff_24h_db,)
             ).fetchall()
             for r in rows:
                 if r['id'] not in all_jobs_24h:
@@ -1081,21 +1085,21 @@ def api_dashboard():
 
             # CLI
             row = conn.execute(
-                "SELECT COUNT(*) as c FROM executions WHERE created_at >= ?", (cutoff_24h,)
+                "SELECT COUNT(*) as c FROM executions WHERE REPLACE(created_at, 'T', ' ') >= ?", (cutoff_24h_db,)
             ).fetchone()
             cli_total = row['c'] if row else 0
             row = conn.execute(
-                "SELECT COUNT(*) as c FROM executions WHERE exit_code = 0 AND created_at >= ?", (cutoff_24h,)
+                "SELECT COUNT(*) as c FROM executions WHERE exit_code = 0 AND REPLACE(created_at, 'T', ' ') >= ?", (cutoff_24h_db,)
             ).fetchone()
             cli_success = row['c'] if row else 0
 
             # Plan runs
             row = conn.execute(
-                "SELECT COUNT(*) as c FROM plan_runs WHERE created_at >= ?", (cutoff_24h,)
+                "SELECT COUNT(*) as c FROM plan_runs WHERE REPLACE(created_at, 'T', ' ') >= ?", (cutoff_24h_db,)
             ).fetchone()
             plan_total = row['c'] if row else 0
             row = conn.execute(
-                "SELECT COUNT(*) as c FROM plan_runs WHERE status = 'success' AND created_at >= ?", (cutoff_24h,)
+                "SELECT COUNT(*) as c FROM plan_runs WHERE status = 'success' AND REPLACE(created_at, 'T', ' ') >= ?", (cutoff_24h_db,)
             ).fetchone()
             plan_success = row['c'] if row else 0
 
@@ -1595,7 +1599,7 @@ def _api_list_plans():
                 step_count = 0
                 try:
                     plan_data = _load_yaml_file(os.path.join(plans_dir, f))
-                    desc = plan_data.get('name', '') or plan_data.get('desc', '')
+                    desc = plan_data.get('desc', '') or plan_data.get('name', '')
                     step_count = len(plan_data.get('steps') or [])
                 except Exception:
                     pass

@@ -179,9 +179,20 @@
                 var data = await res.json();
                 var select = document.getElementById('modal-task');
                 select.innerHTML = '';
-                var tasks = data.tasks || [];
+                var tasks = data.tree || data.tasks || [];
                 tasks.forEach(function(t) {
-                    if (t.type === 'namespace') return;
+                    if (t.type === 'namespace') {
+                        // Add children only
+                        if (t.children) {
+                            t.children.forEach(function(c) {
+                                var copt = document.createElement('option');
+                                copt.value = c.name;
+                                copt.textContent = c.name + (c.desc ? ' - ' + c.desc : '');
+                                select.appendChild(copt);
+                            });
+                        }
+                        return;
+                    }
                     var opt = document.createElement('option');
                     opt.value = t.name;
                     opt.textContent = t.name + (t.desc ? ' - ' + t.desc : '');
@@ -197,7 +208,7 @@
                     }
                 });
                 select.onchange = function() { loadParams(select.value); };
-                if (tasks.length > 0) loadParams(tasks[0].name);
+                if (select.options.length > 0) loadParams(select.options[0].value);
             } catch (e) {
                 showToast('加载任务失败: ' + e.message, 'error');
             }
