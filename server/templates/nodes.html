@@ -26,6 +26,31 @@
             <p>查看和管理连接的工作节点</p>
         </div>
 
+        <!-- 注册节点表单 -->
+        <div class="card" style="margin-bottom:1.2rem;">
+            <h2>注册节点</h2>
+            <form id="register-form" class="register-form" onsubmit="return handleRegister(event)">
+                <div class="register-fields">
+                    <div class="form-group">
+                        <label>节点名称 *</label>
+                        <input type="text" id="reg-name" required placeholder="如: build-node-01">
+                    </div>
+                    <div class="form-group">
+                        <label>节点 ID</label>
+                        <input type="text" id="reg-id" placeholder="留空自动生成">
+                    </div>
+                    <div class="form-group">
+                        <label>标签</label>
+                        <input type="text" id="reg-tags" placeholder="逗号分隔, 如: linux,prod,gpu">
+                    </div>
+                    <div class="form-group" style="display:flex; align-items:flex-end;">
+                        <button type="submit" class="btn btn-primary">注册</button>
+                    </div>
+                </div>
+                <div id="reg-msg" style="font-size:0.85rem; margin-top:0.5rem;"></div>
+            </form>
+        </div>
+
         <div id="nodes-container">
             <div class="loading">加载中...</div>
         </div>
@@ -125,6 +150,41 @@
             }
         }
 
+        async function handleRegister(e) {
+            e.preventDefault();
+            var name = document.getElementById('reg-name').value.trim();
+            var id = document.getElementById('reg-id').value.trim();
+            var tagsStr = document.getElementById('reg-tags').value.trim();
+            var tags = tagsStr ? tagsStr.split(',').map(function(t) { return t.trim(); }).filter(Boolean) : [];
+            var msgEl = document.getElementById('reg-msg');
+
+            try {
+                var body = {name: name, tags: tags};
+                if (id) body.id = id;
+                var res = await fetch('/api/v1/nodes/register', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body)
+                });
+                var data = await res.json();
+                if (data.id) {
+                    msgEl.style.color = 'var(--success, #52c41a)';
+                    msgEl.textContent = '注册成功: ' + data.id;
+                    document.getElementById('reg-name').value = '';
+                    document.getElementById('reg-id').value = '';
+                    document.getElementById('reg-tags').value = '';
+                    loadNodes();
+                } else {
+                    msgEl.style.color = 'var(--danger, #ff4d4f)';
+                    msgEl.textContent = '注册失败: ' + (data.error || '未知错误');
+                }
+            } catch (err) {
+                msgEl.style.color = 'var(--danger, #ff4d4f)';
+                msgEl.textContent = '请求失败: ' + err.message;
+            }
+            return false;
+        }
+
         // WebSocket 实时更新
         socket.on('node_update', function() { loadNodes(); });
 
@@ -136,6 +196,46 @@
     </script>
 
     <style>
+        .register-form .register-fields {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr auto;
+            gap: 0.8rem;
+            align-items: end;
+        }
+
+        .register-form .form-group {
+            margin-bottom: 0;
+        }
+
+        .register-form label {
+            display: block;
+            font-weight: 500;
+            margin-bottom: 0.3rem;
+            font-size: 0.88rem;
+        }
+
+        .register-form input[type="text"] {
+            width: 100%;
+            padding: 0.5rem 0.7rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 0.9rem;
+            background: var(--card-bg, #fff);
+            box-sizing: border-box;
+        }
+
+        .register-form input[type="text"]:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(22,119,255,0.15);
+        }
+
+        @media (max-width: 768px) {
+            .register-form .register-fields {
+                grid-template-columns: 1fr;
+            }
+        }
+
         .empty-state {
             text-align: center;
             padding: 3rem 2rem;

@@ -213,8 +213,24 @@
                 html += '<select id="node-select"><option value="">本地执行</option></select>';
                 html += '</div>';
 
-                html += '<button type="submit" class="btn btn-primary btn-block" style="margin-top:0.8rem;">执行</button>';
+                html += '<div style="display:flex; gap:0.5rem; margin-top:0.8rem;">';
+                html += '<button type="submit" class="btn btn-primary" style="flex:1;">执行</button>';
+                html += '<button type="button" class="btn btn-secondary" onclick="toggleYaml(\'' + escapeHtml(data.name) + '\')" style="flex:0 0 auto;">YAML</button>';
+                html += '</div>';
                 html += '</form>';
+
+                // YAML 编辑区域 (默认隐藏)
+                html += '<div id="yaml-panel" style="display:none; margin-top:1rem; border-top:1px solid var(--border); padding-top:0.8rem;">';
+                html += '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">';
+                html += '<h4 style="margin:0; font-size:0.95rem;">YAML 源文件</h4>';
+                html += '<span id="yaml-file-path" style="font-size:0.8rem; color:var(--text-muted);"></span>';
+                html += '</div>';
+                html += '<textarea id="yaml-editor" style="width:100%; min-height:200px; font-family:monospace; font-size:0.85rem; padding:0.6rem; border:1px solid var(--border); border-radius:6px; background:var(--bg-color,#f0f2f5); box-sizing:border-box; resize:vertical; tab-size:2;"></textarea>';
+                html += '<div style="display:flex; gap:0.5rem; margin-top:0.5rem;">';
+                html += '<button class="btn btn-sm btn-primary" onclick="saveYaml()">保存</button>';
+                html += '<span id="yaml-save-msg" style="font-size:0.8rem; color:var(--text-muted); line-height:2;"></span>';
+                html += '</div>';
+                html += '</div>';
 
                 container.innerHTML = html;
                 loadNodes();
@@ -302,6 +318,63 @@
             }
             alert('批量执行结果:\n\n' + results.join('\n'));
             window.location.href = '/jobs';
+        }
+
+        var currentYamlType = '';
+
+        async function toggleYaml(taskName) {
+            var panel = document.getElementById('yaml-panel');
+            if (!panel) return;
+            if (panel.style.display !== 'none') {
+                panel.style.display = 'none';
+                return;
+            }
+            panel.style.display = 'block';
+            var editor = document.getElementById('yaml-editor');
+            var pathEl = document.getElementById('yaml-file-path');
+            editor.value = '加载中...';
+            pathEl.textContent = '';
+
+            try {
+                var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName) + '/yaml');
+                var data = await res.json();
+                if (data.error) {
+                    editor.value = '# 错误: ' + data.error;
+                    return;
+                }
+                editor.value = data.yaml || '';
+                pathEl.textContent = data.file || '';
+                currentYamlType = data.type || '';
+            } catch (e) {
+                editor.value = '# 加载失败: ' + e.message;
+            }
+        }
+
+        async function saveYaml() {
+            if (!currentTask) return;
+            var editor = document.getElementById('yaml-editor');
+            var msgEl = document.getElementById('yaml-save-msg');
+            msgEl.textContent = '保存中...';
+            msgEl.style.color = 'var(--text-muted)';
+
+            try {
+                var res = await fetch('/api/v1/tasks/' + encodeURIComponent(currentTask) + '/yaml', {
+                    method: 'PUT',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({yaml: editor.value, type: currentYamlType})
+                });
+                var data = await res.json();
+                if (data.ok) {
+                    msgEl.textContent = '已保存';
+                    msgEl.style.color = 'var(--success, #52c41a)';
+                } else {
+                    msgEl.textContent = data.error || '保存失败';
+                    msgEl.style.color = 'var(--danger, #ff4d4f)';
+                }
+            } catch (e) {
+                msgEl.textContent = '保存失败: ' + e.message;
+                msgEl.style.color = 'var(--danger, #ff4d4f)';
+            }
         }
 
         // 初始加载

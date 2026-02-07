@@ -8,10 +8,13 @@
 EZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EZ_VERSION="2.1.0"
 
-# 本地二进制路径
+# 本地二进制路径 (优先 dep/，回退系统路径)
 YQ="$EZ_ROOT/dep/yq"
+[[ -x "$YQ" ]] || YQ="$(command -v yq 2>/dev/null || echo "$EZ_ROOT/dep/yq")"
 TASK="$EZ_ROOT/dep/task"
+[[ -x "$TASK" ]] || TASK="$(command -v task 2>/dev/null || echo "$EZ_ROOT/dep/task")"
 YTT="$EZ_ROOT/dep/ytt"
+[[ -x "$YTT" ]] || YTT="$(command -v ytt 2>/dev/null || echo "$EZ_ROOT/dep/ytt")"
 
 # -----------------------------------------------------------------------------
 # Core terminology (see DESIGN.md)
@@ -226,18 +229,21 @@ info() {
 # 依赖检查与自动安装
 # -----------------------------------------------------------------------------
 ensure_deps() {
-    # 已存在则跳过（支持离线环境直接拷贝 dep/ 即用）
+    # 已存在则跳过（支持离线环境直接拷贝 dep/ 即用，或 Docker 系统安装）
     [[ -x "$YQ" ]] && [[ -x "$TASK" ]] && return 0
 
     # 尝试自动安装
-    if command -v curl &>/dev/null; then
+    local install_script="$EZ_ROOT/dep/install-deps.sh"
+    if [[ -f "$install_script" ]] && command -v curl &>/dev/null; then
         info "首次运行，自动安装依赖..."
-        bash "$EZ_ROOT/dep/install-deps.sh" || die "依赖安装失败，请手动运行: ./dep/install-deps.sh"
+        bash "$install_script" || die "依赖安装失败，请手动运行: ./dep/install-deps.sh"
     else
-        die "缺少依赖 (yq/task)，请手动将二进制文件放入 dep/ 目录\n  或安装 curl 后重试"
+        die "缺少依赖 (yq/task)，请手动将二进制文件放入 dep/ 目录\n  或安装到系统 PATH 中"
     fi
 
-    # 再次检查
+    # 重新检测路径（安装后 dep/ 应可用）
+    [[ -x "$YQ" ]] || YQ="$(command -v yq 2>/dev/null || true)"
+    [[ -x "$TASK" ]] || TASK="$(command -v task 2>/dev/null || true)"
     [[ -x "$YQ" ]] || die "yq 未找到"
     [[ -x "$TASK" ]] || die "task 未找到"
 }

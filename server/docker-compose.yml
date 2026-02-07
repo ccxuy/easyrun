@@ -20,6 +20,8 @@ services:
       - ../plans:/app/plans:ro
       - ../plugins:/app/plugins:ro
       - ../templates:/app/templates:ro
+      - ../test:/app/test:ro
+      - ../lib:/app/lib:ro
     environment:
       - EZ_SERVER_TOKEN=${EZ_SERVER_TOKEN:-}
       - EZ_HTTP_PORT=8080

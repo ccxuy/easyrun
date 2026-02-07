@@ -264,22 +264,18 @@ def api_remove_node(node_id):
 
 @app.route('/api/v1/tasks', methods=['GET'])
 def api_list_tasks():
-    """列出可用任务"""
+    """列出可用任务 (复用 task tree 逻辑)"""
     try:
-        result = subprocess.run(
-            [os.path.join(EZ_ROOT, 'ez'), 'list'],
-            capture_output=True, text=True, timeout=10
-        )
-        # 解析输出
+        tree_resp = api_task_tree()
+        data = tree_resp.get_json()
+        # 扁平化: 展开 namespace children
         tasks = []
-        for line in result.stdout.split('\n'):
-            line = line.strip()
-            if line and not line.startswith('Tasks in'):
-                parts = line.split(maxsplit=1)
-                if parts:
-                    name = parts[0]
-                    desc = parts[1] if len(parts) > 1 else ''
-                    tasks.append({'name': name, 'desc': desc})
+        for item in data.get('tree', []):
+            if item.get('type') == 'namespace' and item.get('children'):
+                for child in item['children']:
+                    tasks.append({'name': child['name'], 'desc': child.get('desc', '')})
+            else:
+                tasks.append({'name': item['name'], 'desc': item.get('desc', '')})
         return jsonify({'tasks': tasks})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -293,7 +289,7 @@ def api_get_task(task_name):
             [os.path.join(EZ_ROOT, 'ez'), 'show', task_name],
             capture_output=True, text=True, timeout=10
         )
-        return jsonify({'name': task_name, 'details': result.stdout})
+        return jsonify({'name': task_name, 'details': strip_ansi(result.stdout)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -348,13 +344,19 @@ def _execute_job_local(job_id):
     job['started_at'] = datetime.now().isoformat()
     socketio.emit('job_update', job)
 
-    # 构建命令
-    cmd = [os.path.join(EZ_ROOT, 'ez'), 'run', job['task']]
+    # 使用 task 直接执行 (避免 ez ensure_deps 在 Docker 中的问题)
+    task_bin = os.path.join(EZ_ROOT, 'dep', 'task')
+    if not os.path.isfile(task_bin):
+        import shutil
+        task_bin = shutil.which('task') or 'task'
+
+    cmd = [task_bin, '-t', os.path.join(EZ_ROOT, 'Taskfile.yml'), job['task']]
+    env = os.environ.copy()
     for k, v in job.get('vars', {}).items():
-        cmd.append(f'{k}={v}')
+        env[k] = v
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, env=env, cwd=EZ_ROOT)
         job['logs'] = result.stdout + result.stderr
         job['exit_code'] = result.returncode
         job['status'] = 'success' if result.returncode == 0 else 'failed'
@@ -871,6 +873,112 @@ def api_task_params(task_name):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/v1/tasks/<task_name>/yaml', methods=['GET'])
+def api_task_yaml(task_name):
+    """获取任务 YAML 源文件"""
+    try:
+        # 目录任务
+        dir_taskfile = os.path.join(EZ_ROOT, 'tasks', task_name, 'Taskfile.yml')
+        if os.path.isfile(dir_taskfile):
+            with open(dir_taskfile, 'r', encoding='utf-8') as f:
+                return jsonify({'yaml': f.read(), 'file': f'tasks/{task_name}/Taskfile.yml', 'type': 'dir'})
+
+        # 工具任务
+        tool_file = os.path.join(EZ_ROOT, 'lib', 'tools', f'{task_name}.yml')
+        if os.path.isfile(tool_file):
+            with open(tool_file, 'r', encoding='utf-8') as f:
+                return jsonify({'yaml': f.read(), 'file': f'lib/tools/{task_name}.yml', 'type': 'tool'})
+
+        # 行内任务: 提取 Taskfile.yml 中对应 task 片段
+        taskfile = os.path.join(EZ_ROOT, 'Taskfile.yml')
+        actual_task = task_name
+        actual_file = taskfile
+        if ':' in task_name:
+            ns, sub = task_name.split(':', 1)
+            inc_result = subprocess.run(
+                [YQ, 'eval', f'.includes."{ns}".taskfile // .includes."{ns}" // ""', taskfile],
+                capture_output=True, text=True, timeout=5
+            )
+            inc_path = inc_result.stdout.strip().strip('"')
+            if inc_path:
+                actual_file = os.path.join(EZ_ROOT, inc_path)
+            actual_task = sub
+
+        if os.path.isfile(actual_file):
+            result = subprocess.run(
+                [YQ, 'eval', f'.tasks."{actual_task}"', actual_file],
+                capture_output=True, text=True, timeout=5
+            )
+            rel_path = os.path.relpath(actual_file, EZ_ROOT)
+            return jsonify({'yaml': result.stdout, 'file': rel_path, 'task_key': actual_task, 'type': 'inline'})
+
+        return jsonify({'error': 'Task not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v1/tasks/<task_name>/yaml', methods=['PUT'])
+def api_save_task_yaml(task_name):
+    """保存任务 YAML"""
+    try:
+        data = request.json or {}
+        yaml_content = data.get('yaml', '')
+        file_type = data.get('type', '')
+
+        if file_type == 'dir':
+            target = os.path.join(EZ_ROOT, 'tasks', task_name, 'Taskfile.yml')
+        elif file_type == 'tool':
+            target = os.path.join(EZ_ROOT, 'lib', 'tools', f'{task_name}.yml')
+        else:
+            return jsonify({'error': '行内任务暂不支持直接保存，请手动编辑 Taskfile.yml'}), 400
+
+        if not os.path.isfile(target):
+            return jsonify({'error': f'File not found: {target}'}), 404
+
+        with open(target, 'w', encoding='utf-8') as f:
+            f.write(yaml_content)
+
+        return jsonify({'ok': True, 'file': os.path.relpath(target, EZ_ROOT)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v1/plans/<plan_name>/yaml', methods=['GET'])
+def api_plan_yaml(plan_name):
+    """获取 Plan YAML 源文件"""
+    try:
+        plan_file = os.path.join(EZ_ROOT, 'plans', f'{plan_name}.yml')
+        if not os.path.isfile(plan_file):
+            plan_file = os.path.join(EZ_ROOT, 'plans', f'{plan_name}.yaml')
+        if not os.path.isfile(plan_file):
+            return jsonify({'error': 'Plan not found'}), 404
+
+        with open(plan_file, 'r', encoding='utf-8') as f:
+            return jsonify({'yaml': f.read(), 'file': os.path.relpath(plan_file, EZ_ROOT)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v1/plans/<plan_name>/yaml', methods=['PUT'])
+def api_save_plan_yaml(plan_name):
+    """保存 Plan YAML"""
+    try:
+        data = request.json or {}
+        yaml_content = data.get('yaml', '')
+
+        plan_file = os.path.join(EZ_ROOT, 'plans', f'{plan_name}.yml')
+        if not os.path.isfile(plan_file):
+            plan_file = os.path.join(EZ_ROOT, 'plans', f'{plan_name}.yaml')
+        if not os.path.isfile(plan_file):
+            return jsonify({'error': 'Plan not found'}), 404
+
+        with open(plan_file, 'w', encoding='utf-8') as f:
+            f.write(yaml_content)
+
+        return jsonify({'ok': True, 'file': os.path.relpath(plan_file, EZ_ROOT)})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 # =============================================================================
 # API Routes - Plans
 # =============================================================================
@@ -887,7 +995,7 @@ def api_list_plans():
                 # 读取 plan 概要
                 try:
                     result = subprocess.run(
-                        [os.path.join(EZ_ROOT, 'dep', 'yq'), 'eval', '.name // .desc // ""',
+                        [YQ, 'eval', '.name // .desc // ""',
                          os.path.join(plans_dir, f)],
                         capture_output=True, text=True, timeout=5
                     )
@@ -901,13 +1009,43 @@ def api_list_plans():
 
 @app.route('/api/v1/plans/<plan_name>', methods=['GET'])
 def api_get_plan(plan_name):
-    """获取计划详情"""
+    """获取计划详情 (结构化 JSON)"""
     try:
+        plan_file = os.path.join(EZ_ROOT, 'plans', f'{plan_name}.yml')
+        if not os.path.isfile(plan_file):
+            plan_file = os.path.join(EZ_ROOT, 'plans', f'{plan_name}.yaml')
+        if not os.path.isfile(plan_file):
+            return jsonify({'error': f'Plan not found: {plan_name}'}), 404
+
+        # 读取原始 YAML
+        with open(plan_file, 'r', encoding='utf-8') as f:
+            yaml_content = f.read()
+
+        # 用 yq 解析结构化数据
         result = subprocess.run(
-            [os.path.join(EZ_ROOT, 'ez'), 'plan', 'show', plan_name],
+            [YQ, 'eval', '-o=json', '.', plan_file],
             capture_output=True, text=True, timeout=10
         )
-        return jsonify({'name': plan_name, 'details': result.stdout, 'exit_code': result.returncode})
+        plan_data = json.loads(result.stdout) if result.stdout.strip() else {}
+
+        # 提取步骤
+        steps = []
+        for s in plan_data.get('steps', []):
+            steps.append({
+                'name': s.get('name', ''),
+                'task': s.get('task', ''),
+                'needs': s.get('needs', []) or [],
+                'vars': s.get('vars', {}) or {},
+                'artifacts': s.get('artifacts', []) or [],
+                'inputs': s.get('inputs', []) or []
+            })
+
+        return jsonify({
+            'name': plan_data.get('name', plan_name),
+            'desc': plan_data.get('desc', ''),
+            'steps': steps,
+            'yaml': yaml_content
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
