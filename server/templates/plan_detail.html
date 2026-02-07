@@ -274,7 +274,7 @@
                 var res = await fetch('/api/v1/plans/' + encodeURIComponent(planName) + '/yaml', {
                     method: 'PUT',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({content: content})
+                    body: JSON.stringify({yaml: content})
                 });
                 var data = await res.json();
                 if (data.ok) {

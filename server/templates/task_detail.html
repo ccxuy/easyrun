@@ -194,6 +194,7 @@
                 var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName) + '/yaml');
                 var data = await res.json();
                 document.getElementById('yaml-editor').value = data.content || data.yaml || '';
+                if (data.type) taskType = data.type;
             } catch (e) {
                 showToast('加载 YAML 失败: ' + e.message, 'error');
             }
@@ -205,7 +206,7 @@
                 var res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskName) + '/yaml', {
                     method: 'PUT',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({content: content})
+                    body: JSON.stringify({yaml: content, type: taskType})
                 });
                 var data = await res.json();
                 if (data.ok) {

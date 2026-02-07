@@ -31,8 +31,17 @@
         <!-- 注册节点表单 -->
         <div class="card" style="margin-bottom:1.2rem;">
             <h2>注册节点</h2>
+            <div style="margin-bottom:0.8rem;">
+                <label style="font-weight:500; font-size:0.88rem; margin-right:1rem;">连接方式:</label>
+                <label style="font-size:0.88rem; margin-right:0.8rem;">
+                    <input type="radio" name="conn-type" value="agent" checked onchange="toggleConnType()"> WebSocket Agent
+                </label>
+                <label style="font-size:0.88rem;">
+                    <input type="radio" name="conn-type" value="ssh" onchange="toggleConnType()"> SSH 直连
+                </label>
+            </div>
             <form id="register-form" class="register-form" onsubmit="return handleRegister(event)">
-                <div class="register-fields">
+                <div class="register-fields" id="agent-fields">
                     <div class="form-group">
                         <label>节点名称 *</label>
                         <input type="text" id="reg-name" required placeholder="如: build-node-01">
@@ -49,8 +58,50 @@
                         <button type="submit" class="btn btn-primary">注册</button>
                     </div>
                 </div>
-                <div id="reg-msg" style="font-size:0.85rem; margin-top:0.5rem;"></div>
             </form>
+            <form id="ssh-register-form" class="register-form" style="display:none;" onsubmit="return handleSSHRegister(event)">
+                <div class="register-fields ssh-fields">
+                    <div class="form-group">
+                        <label>节点名称 *</label>
+                        <input type="text" id="ssh-name" required placeholder="如: prod-server-01">
+                    </div>
+                    <div class="form-group">
+                        <label>主机地址 *</label>
+                        <input type="text" id="ssh-host" required placeholder="192.168.1.100">
+                    </div>
+                    <div class="form-group">
+                        <label>端口</label>
+                        <input type="number" id="ssh-port" value="22" min="1" max="65535">
+                    </div>
+                    <div class="form-group">
+                        <label>用户名 *</label>
+                        <input type="text" id="ssh-user" required placeholder="root">
+                    </div>
+                    <div class="form-group">
+                        <label>认证方式</label>
+                        <select id="ssh-auth-type" onchange="toggleAuthType()">
+                            <option value="password">密码</option>
+                            <option value="key">密钥文件</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="ssh-password-group">
+                        <label>密码</label>
+                        <input type="password" id="ssh-password" placeholder="SSH 密码">
+                    </div>
+                    <div class="form-group" id="ssh-key-group" style="display:none;">
+                        <label>密钥路径</label>
+                        <input type="text" id="ssh-key-path" placeholder="/root/.ssh/id_rsa">
+                    </div>
+                    <div class="form-group">
+                        <label>标签</label>
+                        <input type="text" id="ssh-tags" placeholder="逗号分隔">
+                    </div>
+                    <div class="form-group" style="display:flex; align-items:flex-end;">
+                        <button type="submit" class="btn btn-primary">注册</button>
+                    </div>
+                </div>
+            </form>
+            <div id="reg-msg" style="font-size:0.85rem; margin-top:0.5rem;"></div>
         </div>
 
         <div id="nodes-container">
@@ -130,6 +181,11 @@
                             }).join('') + '</div>';
                     }
 
+                    var connType = node.connection_type || 'agent';
+                    var connLabel = connType === 'ssh'
+                        ? 'SSH: ' + escapeHtml(node.host || '')
+                        : 'Agent';
+
                     html += '<div class="card node-detail-card ' + escapeHtml(node.status) + '">' +
                         '<div class="node-card-header">' +
                         '<div class="node-card-name">' + statusIcon + ' ' + escapeHtml(node.name) + '</div>' +
@@ -138,6 +194,7 @@
                         '</div>' +
                         '<div class="node-card-body">' +
                         '<div class="node-info-row"><span class="node-info-label">ID</span><code>' + escapeHtml(node.id) + '</code></div>' +
+                        '<div class="node-info-row"><span class="node-info-label">连接方式</span><span>' + connLabel + '</span></div>' +
                         '<div class="node-info-row"><span class="node-info-label">最后心跳</span><span>' + formatTime(node.last_seen) + '</span></div>' +
                         '<div class="node-info-row"><span class="node-info-label">当前任务</span><span>' +
                         (node.current_job ? '<code>' + escapeHtml(node.current_job) + '</code>' : '空闲') + '</span></div>' +
@@ -199,6 +256,65 @@
             return false;
         }
 
+        function toggleConnType() {
+            var connType = document.querySelector('input[name="conn-type"]:checked').value;
+            document.getElementById('register-form').style.display = connType === 'agent' ? '' : 'none';
+            document.getElementById('ssh-register-form').style.display = connType === 'ssh' ? '' : 'none';
+        }
+
+        function toggleAuthType() {
+            var authType = document.getElementById('ssh-auth-type').value;
+            document.getElementById('ssh-password-group').style.display = authType === 'password' ? '' : 'none';
+            document.getElementById('ssh-key-group').style.display = authType === 'key' ? '' : 'none';
+        }
+
+        async function handleSSHRegister(e) {
+            e.preventDefault();
+            var name = document.getElementById('ssh-name').value.trim();
+            var host = document.getElementById('ssh-host').value.trim();
+            var port = parseInt(document.getElementById('ssh-port').value) || 22;
+            var ssh_user = document.getElementById('ssh-user').value.trim();
+            var auth_type = document.getElementById('ssh-auth-type').value;
+            var password = document.getElementById('ssh-password').value;
+            var key_path = document.getElementById('ssh-key-path').value.trim();
+            var tagsStr = document.getElementById('ssh-tags').value.trim();
+            var tags = tagsStr ? tagsStr.split(',').map(function(t) { return t.trim(); }).filter(Boolean) : [];
+
+            if (!name || !host || !ssh_user) {
+                showToast('名称、主机和用户名为必填项', 'error');
+                return false;
+            }
+
+            try {
+                var body = {name: name, host: host, port: port, ssh_user: ssh_user,
+                    auth_type: auth_type, tags: tags};
+                if (auth_type === 'password') body.password = password;
+                else body.key_path = key_path;
+
+                var res = await fetch('/api/v1/nodes/register-ssh', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body)
+                });
+                var data = await res.json();
+                if (data.id) {
+                    showToast('SSH 节点注册成功: ' + data.id, 'success');
+                    document.getElementById('ssh-name').value = '';
+                    document.getElementById('ssh-host').value = '';
+                    document.getElementById('ssh-user').value = '';
+                    document.getElementById('ssh-password').value = '';
+                    document.getElementById('ssh-key-path').value = '';
+                    document.getElementById('ssh-tags').value = '';
+                    loadNodes();
+                } else {
+                    showToast('注册失败: ' + (data.error || '未知错误'), 'error');
+                }
+            } catch (err) {
+                showToast('请求失败: ' + err.message, 'error');
+            }
+            return false;
+        }
+
         // WebSocket 实时更新
         socket.on('node_update', function() { loadNodes(); });
 
@@ -215,6 +331,10 @@
             grid-template-columns: 1fr 1fr 1fr auto;
             gap: 0.8rem;
             align-items: end;
+        }
+
+        .register-form .ssh-fields {
+            grid-template-columns: 1fr 1fr 1fr 1fr;
         }
 
         .register-form .form-group {
@@ -239,6 +359,26 @@
         }
 
         .register-form input[type="text"]:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(22,119,255,0.15);
+        }
+
+        .register-form input[type="password"],
+        .register-form input[type="number"],
+        .register-form select {
+            width: 100%;
+            padding: 0.5rem 0.7rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 0.9rem;
+            background: var(--card-bg, #fff);
+            box-sizing: border-box;
+        }
+
+        .register-form input[type="password"]:focus,
+        .register-form input[type="number"]:focus,
+        .register-form select:focus {
             outline: none;
             border-color: var(--primary);
             box-shadow: 0 0 0 2px rgba(22,119,255,0.15);

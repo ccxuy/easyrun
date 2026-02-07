@@ -6,6 +6,7 @@ EZ Server - 分布式任务执行服务器
 import os
 import re
 import json
+import sys
 import time
 import uuid
 import sqlite3
@@ -13,6 +14,9 @@ import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock, Thread
+
+# 确保 server/ 目录在导入路径中
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import yaml
 
@@ -113,9 +117,10 @@ def _invalidate_cache():
 
 
 # Flask 应用
+_server_dir = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__,
-            template_folder=os.path.join(os.path.dirname(__file__), 'templates'),
-            static_folder=os.path.join(os.path.dirname(__file__), 'static'))
+            template_folder=os.path.join(_server_dir, 'templates'),
+            static_folder=os.path.join(_server_dir, 'static'))
 app.config['SECRET_KEY'] = os.environ.get('EZ_SECRET_KEY', 'ez-secret-key')
 CORS(app)
 socketio = SocketIO(app, cors_allowed_origins="*")
@@ -227,6 +232,20 @@ def init_db():
             conn.execute('SELECT completed_steps FROM plan_runs LIMIT 1')
         except sqlite3.OperationalError:
             conn.execute('ALTER TABLE plan_runs ADD COLUMN completed_steps INTEGER DEFAULT 0')
+        # Migrate: nodes table SSH columns
+        for col, col_def in [
+            ('host', 'TEXT'),
+            ('port', 'INTEGER DEFAULT 22'),
+            ('ssh_user', 'TEXT'),
+            ('auth_type', 'TEXT'),
+            ('ssh_password', 'TEXT'),
+            ('ssh_key_path', 'TEXT'),
+            ('connection_type', "TEXT DEFAULT 'agent'"),
+        ]:
+            try:
+                conn.execute(f'SELECT {col} FROM nodes LIMIT 1')
+            except sqlite3.OperationalError:
+                conn.execute(f'ALTER TABLE nodes ADD COLUMN {col} {col_def}')
         conn.commit()
 
 
@@ -346,7 +365,9 @@ def api_list_nodes():
             'status': node.get('status', 'offline'),
             'tags': node.get('tags', []),
             'last_seen': node.get('last_seen'),
-            'current_job': node.get('current_job')
+            'current_job': node.get('current_job'),
+            'connection_type': node.get('connection_type', 'agent'),
+            'host': node.get('host'),
         })
     return jsonify({'nodes': node_list})
 
@@ -413,7 +434,67 @@ def api_remove_node(node_id):
     """移除节点"""
     if node_id in nodes:
         del nodes[node_id]
+    with db_lock:
+        with get_db() as conn:
+            conn.execute('DELETE FROM nodes WHERE id = ?', (node_id,))
+            conn.commit()
     return jsonify({'status': 'removed'})
+
+
+@app.route('/api/v1/nodes/register-ssh', methods=['POST'])
+def api_register_ssh_node():
+    """注册 SSH 节点"""
+    data = request.json or {}
+    name = data.get('name', '').strip()
+    host = data.get('host', '').strip()
+    port = data.get('port', 22)
+    ssh_user = data.get('ssh_user', '').strip()
+    auth_type = data.get('auth_type', 'password')
+    password = data.get('password', '')
+    key_path = data.get('key_path', '')
+    tags = data.get('tags', [])
+
+    if not name or not host or not ssh_user:
+        return jsonify({'error': 'name, host, ssh_user required'}), 400
+
+    # 测试连接
+    from ssh_executor import test_ssh_connection
+    ok, msg = test_ssh_connection(host, int(port), ssh_user, auth_type,
+                                  password=password, key_path=key_path)
+    if not ok:
+        return jsonify({'error': f'SSH 连接失败: {msg}'}), 400
+
+    node_id = str(uuid.uuid4())[:8]
+    node_data = {
+        'id': node_id,
+        'name': name,
+        'status': 'online',
+        'tags': tags,
+        'last_seen': datetime.now().isoformat(),
+        'current_job': None,
+        'connection_type': 'ssh',
+        'host': host,
+        'port': int(port),
+        'ssh_user': ssh_user,
+        'auth_type': auth_type,
+        'ssh_password': password,
+        'ssh_key_path': key_path,
+    }
+    nodes[node_id] = node_data
+
+    # 持久化
+    with db_lock:
+        with get_db() as conn:
+            conn.execute('''
+                INSERT OR REPLACE INTO nodes (id, name, tags, status, last_seen,
+                    host, port, ssh_user, auth_type, ssh_password, ssh_key_path, connection_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (node_id, name, json.dumps(tags), 'online', datetime.now(),
+                  host, int(port), ssh_user, auth_type, password, key_path, 'ssh'))
+            conn.commit()
+
+    socketio.emit('node_update', node_data)
+    return jsonify({'id': node_id, 'status': 'registered', 'connection_type': 'ssh'})
 
 
 # =============================================================================
@@ -608,6 +689,9 @@ def api_run_task():
     # 如果没有指定节点，在本地执行
     if not node_id:
         Thread(target=_execute_job_local, args=(job_id,), daemon=True).start()
+    elif nodes.get(node_id, {}).get('connection_type') == 'ssh':
+        job['status'] = 'running'
+        Thread(target=_execute_job_ssh, args=(job_id,), daemon=True).start()
     else:
         socketio.emit('job_assigned', job, room=node_id)
 
@@ -644,6 +728,61 @@ def _execute_job_local(job_id):
 
     job['finished_at'] = datetime.now().isoformat()
     socketio.emit('job_update', job)
+
+    # 持久化
+    with db_lock:
+        with get_db() as conn:
+            conn.execute('''
+                INSERT OR REPLACE INTO jobs (id, task, node_id, vars, status, exit_code, logs, started_at, finished_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (job_id, job['task'], job.get('node_id'), json.dumps(job.get('vars', {})),
+                  job['status'], job.get('exit_code'), job.get('logs'),
+                  job.get('started_at'), job.get('finished_at')))
+            conn.commit()
+
+
+def _execute_job_ssh(job_id):
+    """通过 SSH 在远程节点执行任务"""
+    from ssh_executor import execute_via_ssh
+
+    job = jobs.get(job_id)
+    if not job:
+        return
+
+    node = nodes.get(job.get('node_id'))
+    if not node:
+        job['status'] = 'error'
+        job['logs'] = 'SSH node not found'
+        job['finished_at'] = datetime.now().isoformat()
+        socketio.emit('job_update', job)
+        return
+
+    job['status'] = 'running'
+    job['started_at'] = datetime.now().isoformat()
+    socketio.emit('job_update', job)
+
+    # 构造远程命令
+    task_bin = 'task'  # 假设远程机器上有 task 命令
+    task_cmd = f'{task_bin} {job["task"]}'
+    for k, v in job.get('vars', {}).items():
+        task_cmd = f'{k}={v} {task_cmd}'
+
+    exit_code, logs = execute_via_ssh(
+        host=node['host'], port=node.get('port', 22),
+        user=node['ssh_user'], auth_type=node.get('auth_type', 'password'),
+        task_cmd=task_cmd,
+        password=node.get('ssh_password'), key_path=node.get('ssh_key_path')
+    )
+
+    job['logs'] = logs
+    job['exit_code'] = exit_code
+    job['status'] = 'success' if exit_code == 0 else 'failed'
+    job['finished_at'] = datetime.now().isoformat()
+    socketio.emit('job_update', job)
+
+    # 更新节点状态
+    if job.get('node_id') and job['node_id'] in nodes:
+        nodes[job['node_id']]['current_job'] = None
 
     # 持久化
     with db_lock:
@@ -741,6 +880,18 @@ def api_report_job_result(job_id):
         nodes[node_id]['current_job'] = None
 
     socketio.emit('job_update', job)
+
+    # 持久化到数据库
+    with db_lock:
+        with get_db() as conn:
+            conn.execute('''
+                INSERT OR REPLACE INTO jobs (id, task, node_id, vars, status, exit_code, logs, started_at, finished_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (job_id, job['task'], job.get('node_id'), json.dumps(job.get('vars', {})),
+                  job['status'], job.get('exit_code'), job.get('logs'),
+                  job.get('started_at'), job.get('finished_at')))
+            conn.commit()
+
     return jsonify({'status': 'ok'})
 
 
@@ -914,24 +1065,19 @@ def api_dashboard():
                     'finished_at': r['finished_at']
                 })
 
-            # 24h stats
-            total_24h = 0
-            success_24h = 0
-            # From memory jobs
-            for job in jobs.values():
+            # 24h stats — 去重: 先收集内存, 再补充 DB 中不在内存的
+            all_jobs_24h = {}
+            for jid, job in jobs.items():
                 if (job.get('created_at') or '') >= cutoff_24h:
-                    total_24h += 1
-                    if job.get('status') == 'success':
-                        success_24h += 1
-            # From DB jobs
-            row = conn.execute(
-                "SELECT COUNT(*) as c FROM jobs WHERE created_at >= ?", (cutoff_24h,)
-            ).fetchone()
-            db_total = row['c'] if row else 0
-            row = conn.execute(
-                "SELECT COUNT(*) as c FROM jobs WHERE status = 'success' AND created_at >= ?", (cutoff_24h,)
-            ).fetchone()
-            db_success = row['c'] if row else 0
+                    all_jobs_24h[jid] = job.get('status')
+            rows = conn.execute(
+                "SELECT id, status FROM jobs WHERE created_at >= ?", (cutoff_24h,)
+            ).fetchall()
+            for r in rows:
+                if r['id'] not in all_jobs_24h:
+                    all_jobs_24h[r['id']] = r['status']
+            jobs_total = len(all_jobs_24h)
+            jobs_success = sum(1 for s in all_jobs_24h.values() if s == 'success')
 
             # CLI
             row = conn.execute(
@@ -953,8 +1099,8 @@ def api_dashboard():
             ).fetchone()
             plan_success = row['c'] if row else 0
 
-    total = total_24h + db_total + cli_total + plan_total
-    success = success_24h + db_success + cli_success + plan_success
+    total = jobs_total + cli_total + plan_total
+    success = jobs_success + cli_success + plan_success
     success_rate = round(success / total * 100, 1) if total > 0 else 0
 
     # 节点摘要
@@ -984,7 +1130,16 @@ def api_dashboard():
 @app.route('/api/v1/stats', methods=['GET'])
 def api_stats():
     """聚合统计数据"""
-    job_list = list(jobs.values())
+    # 合并内存 + DB jobs, 去重
+    all_jobs = {jid: dict(job) for jid, job in jobs.items()}
+    with db_lock:
+        with get_db() as conn:
+            rows = conn.execute('SELECT * FROM jobs ORDER BY created_at DESC LIMIT 1000').fetchall()
+            for r in rows:
+                if r['id'] not in all_jobs:
+                    all_jobs[r['id']] = dict(r)
+
+    job_list = list(all_jobs.values())
 
     # 按状态统计
     status_counts = {}
@@ -1769,7 +1924,7 @@ def api_run_single_task():
     task_vars = data.get('vars', {})
     node_id = data.get('node')
 
-    # 如果指定了节点，使用原来的分布式执行
+    # 如果指定了节点，使用分布式执行
     if node_id:
         if node_id not in nodes:
             return jsonify({'error': f'Node {node_id} not found'}), 404
@@ -1780,8 +1935,12 @@ def api_run_single_task():
             'created_at': datetime.now().isoformat()
         }
         jobs[job_id] = job
-        socketio.emit('job_assigned', job, room=node_id)
-        return jsonify({'job_id': job_id, 'status': 'pending'})
+        if nodes.get(node_id, {}).get('connection_type') == 'ssh':
+            job['status'] = 'running'
+            Thread(target=_execute_job_ssh, args=(job_id,), daemon=True).start()
+        else:
+            socketio.emit('job_assigned', job, room=node_id)
+        return jsonify({'job_id': job_id, 'status': job['status']})
 
     # 本地执行
     job_id = str(uuid.uuid4())[:8]
@@ -2099,9 +2258,44 @@ def handle_job_log(data):
 # Main
 # =============================================================================
 
+def _load_nodes_from_db():
+    """启动时从 DB 加载节点到内存"""
+    with db_lock:
+        with get_db() as conn:
+            rows = conn.execute('SELECT * FROM nodes').fetchall()
+            for r in rows:
+                node_id = r['id']
+                tags = []
+                try:
+                    tags = json.loads(r['tags']) if r['tags'] else []
+                except (json.JSONDecodeError, TypeError):
+                    tags = []
+                conn_type = r['connection_type'] if 'connection_type' in r.keys() else 'agent'
+                node_data = {
+                    'id': node_id,
+                    'name': r['name'],
+                    'status': 'online' if conn_type == 'ssh' else 'offline',
+                    'tags': tags,
+                    'last_seen': str(r['last_seen']) if r['last_seen'] else None,
+                    'current_job': None,
+                    'connection_type': conn_type or 'agent',
+                }
+                # SSH 节点额外字段
+                if conn_type == 'ssh':
+                    node_data['host'] = r['host'] if 'host' in r.keys() else ''
+                    node_data['port'] = r['port'] if 'port' in r.keys() else 22
+                    node_data['ssh_user'] = r['ssh_user'] if 'ssh_user' in r.keys() else ''
+                    node_data['auth_type'] = r['auth_type'] if 'auth_type' in r.keys() else 'password'
+                    node_data['ssh_password'] = r['ssh_password'] if 'ssh_password' in r.keys() else ''
+                    node_data['ssh_key_path'] = r['ssh_key_path'] if 'ssh_key_path' in r.keys() else ''
+                nodes[node_id] = node_data
+    print(f'Loaded {len(nodes)} nodes from DB')
+
+
 def main():
     """启动服务器"""
     init_db()
+    _load_nodes_from_db()
     print(f'EZ Server starting on http://0.0.0.0:{HTTP_PORT}')
     print(f'EZ Root: {EZ_ROOT}')
     print(f'Database: {DB_PATH}')

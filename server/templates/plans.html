@@ -75,29 +75,43 @@
                     return;
                 }
 
-                var html = '<div class="plan-card-grid">';
+                var html = '<div class="card" style="padding:0; overflow:hidden;">' +
+                    '<table class="table">' +
+                    '<thead><tr>' +
+                    '<th>名称</th>' +
+                    '<th>描述</th>' +
+                    '<th style="width:80px;">步骤数</th>' +
+                    '<th style="width:140px;">最近执行</th>' +
+                    '<th style="width:80px;">状态</th>' +
+                    '<th style="width:140px;">操作</th>' +
+                    '</tr></thead><tbody>';
+
                 plans.forEach(function(plan) {
                     var lastRunHtml = '';
+                    var lastStatusHtml = '';
                     if (plan.last_run) {
-                        lastRunHtml = '最近: ' + formatTimeAgo(plan.last_run.finished_at) + ' ' + statusBadgeHtml(plan.last_run.status);
+                        lastRunHtml = formatTimeAgo(plan.last_run.finished_at);
+                        lastStatusHtml = statusBadgeHtml(plan.last_run.status);
                     } else {
-                        lastRunHtml = '<span style="color:var(--text-muted);">尚未执行</span>';
+                        lastRunHtml = '<span style="color:var(--text-muted);">-</span>';
+                        lastStatusHtml = '<span style="color:var(--text-muted);">-</span>';
                     }
 
-                    html += '<div class="plan-card" onclick="window.location=\'/plans/' + encodeURIComponent(plan.name) + '\'">' +
-                        '<div class="plan-card-name">' + escapeHtml(plan.name) + '</div>' +
-                        '<div class="plan-card-desc">' + escapeHtml(plan.desc || '无描述') + '</div>' +
-                        '<div class="plan-card-meta">' +
-                        '<span>' + (plan.step_count || 0) + ' 步骤</span>' +
-                        '<span>' + lastRunHtml + '</span>' +
-                        '</div>' +
-                        '<div class="plan-card-actions" onclick="event.stopPropagation();">' +
-                        '<a href="/plans/' + encodeURIComponent(plan.name) + '" class="btn btn-sm">打开</a>' +
+                    html += '<tr onclick="window.location=\'/plans/' + encodeURIComponent(plan.name) + '\'" style="cursor:pointer;">' +
+                        '<td><strong>' + escapeHtml(plan.name) + '</strong></td>' +
+                        '<td style="color:var(--text-muted); font-size:0.88rem;">' + escapeHtml(plan.desc || '') + '</td>' +
+                        '<td>' + (plan.step_count || 0) + '</td>' +
+                        '<td style="font-size:0.85rem;">' + lastRunHtml + '</td>' +
+                        '<td>' + lastStatusHtml + '</td>' +
+                        '<td onclick="event.stopPropagation();">' +
+                        '<div style="display:flex; gap:0.3rem;">' +
                         '<button class="btn btn-sm btn-primary" onclick="runPlan(\'' + escapeHtml(plan.name) + '\')">执行</button>' +
                         '<button class="btn btn-sm btn-danger" onclick="deletePlan(\'' + escapeHtml(plan.name) + '\')">删除</button>' +
-                        '</div></div>';
+                        '</div></td>' +
+                        '</tr>';
                 });
-                html += '</div>';
+
+                html += '</tbody></table></div>';
                 document.getElementById('plans-container').innerHTML = html;
             } catch (e) {
                 document.getElementById('plans-container').innerHTML =

@@ -41,6 +41,12 @@
         var execType = null; // 'task' or 'plan'
         var pollTimer = null;
 
+        function exitCodeHtml(code) {
+            if (code === null || code === undefined) return '-';
+            var color = code === 0 ? 'var(--success)' : 'var(--danger)';
+            return '<span style="color:' + color + '; font-weight:600;">' + code + '</span>';
+        }
+
         async function loadDetail() {
             // Try as plan run first
             try {
@@ -140,7 +146,7 @@
                     '<td><a href="/tasks/' + encodeURIComponent(step.task_name) + '" onclick="event.stopPropagation();">' + escapeHtml(step.task_name) + '</a></td>' +
                     '<td>' + statusBadgeHtml(step.status) + '</td>' +
                     '<td>' + escapeHtml(stepDur) + '</td>' +
-                    '<td>' + (step.exit_code !== null && step.exit_code !== undefined ? step.exit_code : '-') + '</td>' +
+                    '<td>' + exitCodeHtml(step.exit_code) + '</td>' +
                     '<td style="text-align:center;"><span class="step-toggle" id="toggle-' + idx + '">&#9660;</span></td>' +
                     '</tr>';
 
@@ -260,7 +266,7 @@
                 '<div class="detail-grid">' +
                 '<div class="detail-field"><span class="detail-label">任务</span><a href="/tasks/' + encodeURIComponent(job.task || '') + '">' + escapeHtml(job.task || '') + '</a></div>' +
                 '<div class="detail-field"><span class="detail-label">节点</span>' + escapeHtml(job.node_id || '本地') + '</div>' +
-                '<div class="detail-field"><span class="detail-label">退出码</span>' + (job.exit_code !== null && job.exit_code !== undefined ? job.exit_code : '-') + '</div>' +
+                '<div class="detail-field"><span class="detail-label">退出码</span>' + exitCodeHtml(job.exit_code) + '</div>' +
                 '<div class="detail-field"><span class="detail-label">创建时间</span>' + escapeHtml(job.created_at || '-') + '</div>' +
                 '<div class="detail-field"><span class="detail-label">开始时间</span>' + escapeHtml(job.started_at || '-') + '</div>' +
                 '<div class="detail-field"><span class="detail-label">结束时间</span>' + escapeHtml(job.finished_at || '-') + '</div>' +
